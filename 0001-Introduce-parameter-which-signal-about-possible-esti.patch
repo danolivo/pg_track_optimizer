@@ -1,0 +1,985 @@
+From 9c0d13be2fc6e8373b05f867d566129d6819c3f4 Mon Sep 17 00:00:00 2001
+From: Andrey Lepikhov <a.lepikhov@postgrespro.ru>
+Date: Wed, 5 Apr 2023 16:48:53 +0500
+Subject: [PATCH] Introduce parameter which signal about possible estimation
+ error which optimizer has taken into account during the planning. It can tell
+ us that a query with high value of this parameter could be executed in a
+ sub-optimal way. Unfortunately, this feature is designed as patch for a
+ couple of contrib extensions and can be clearly applied over commit
+ 4908c58720.
+
+To use it somehow, introduce the auto_explain.log_min_error GUC where user can
+set minimal error above that query plan will be logged.
+
+pg_stat_statements.track_estimation_error allow to save this value in
+the pg_stat_statements facts table.
+---
+ contrib/auto_explain/auto_explain.c           |  41 ++++-
+ contrib/pg_stat_statements/Makefile           |   1 +
+ .../expected/oldextversions.out               |  65 ++++++++
+ .../pg_stat_statements--1.11--1.12.sql        |  76 +++++++++
+ .../pg_stat_statements/pg_stat_statements.c   | 113 ++++++++++++-
+ .../pg_stat_statements/sql/oldextversions.sql |   5 +
+ doc/src/sgml/pgstatstatements.sgml            |  28 ++++
+ src/backend/commands/explain.c                |  24 +++
+ src/backend/executor/execAsync.c              |   4 +-
+ src/backend/executor/execProcnode.c           |   4 +-
+ src/backend/executor/execUtils.c              | 155 ++++++++++++++++++
+ src/backend/utils/error/elog.c                |   3 +
+ src/include/executor/executor.h               |   1 +
+ src/include/executor/instrument.h             |  24 +++
+ 14 files changed, 526 insertions(+), 18 deletions(-)
+ create mode 100644 contrib/pg_stat_statements/pg_stat_statements--1.11--1.12.sql
+
+diff --git a/contrib/auto_explain/auto_explain.c b/contrib/auto_explain/auto_explain.c
+index c3ac27ae99..9873688470 100644
+--- a/contrib/auto_explain/auto_explain.c
++++ b/contrib/auto_explain/auto_explain.c
+@@ -19,6 +19,7 @@
+ #include "common/pg_prng.h"
+ #include "executor/instrument.h"
+ #include "jit/jit.h"
++#include "nodes/nodeFuncs.h"
+ #include "nodes/params.h"
+ #include "utils/guc.h"
+ 
+@@ -26,6 +27,7 @@ PG_MODULE_MAGIC;
+ 
+ /* GUC variables */
+ static int	auto_explain_log_min_duration = -1; /* msec or -1 */
++static double auto_explain_log_min_error = -1;
+ static int	auto_explain_log_parameter_max_length = -1; /* bytes or -1 */
+ static bool auto_explain_log_analyze = false;
+ static bool auto_explain_log_verbose = false;
+@@ -68,7 +70,7 @@ static int	nesting_level = 0;
+ static bool current_query_sampled = false;
+ 
+ #define auto_explain_enabled() \
+-	(auto_explain_log_min_duration >= 0 && \
++	((auto_explain_log_min_duration >= 0 || auto_explain_log_min_error >= 0) && \
+ 	 (nesting_level == 0 || auto_explain_log_nested_statements) && \
+ 	 current_query_sampled)
+ 
+@@ -105,6 +107,18 @@ _PG_init(void)
+ 							NULL,
+ 							NULL);
+ 
++	DefineCustomRealVariable("auto_explain.log_min_error",
++							 "Sets the minimum planning error above which plans will be logged.",
++							 "Zero prints all plans. -1 turns this feature off.",
++							 &auto_explain_log_min_error,
++							 -1,
++							 -1, INT_MAX, /* Looks like so huge error, as INT_MAX don't make a sense */
++							 PGC_SUSET,
++							 GUC_UNIT_MS,
++							 NULL,
++							 NULL,
++							 NULL);
++
+ 	DefineCustomIntVariable("auto_explain.log_parameter_max_length",
+ 							"Sets the maximum length of query parameters to log.",
+ 							"Zero logs no query parameters, -1 logs them in full.",
+@@ -273,7 +287,8 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
+ 	 */
+ 	if (nesting_level == 0)
+ 	{
+-		if (auto_explain_log_min_duration >= 0 && !IsParallelWorker())
++		if ((auto_explain_log_min_duration >= 0 || auto_explain_log_min_error >= 0)
++			&& !IsParallelWorker())
+ 			current_query_sampled = (pg_prng_double(&pg_global_prng_state) < auto_explain_sample_rate);
+ 		else
+ 			current_query_sampled = false;
+@@ -281,6 +296,10 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
+ 
+ 	if (auto_explain_enabled())
+ 	{
++		if (auto_explain_log_min_error >= 0 &&
++			(eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0)
++			queryDesc->instrument_options |= INSTRUMENT_TIMER;
++
+ 		/* Enable per-node instrumentation iff log_analyze is required. */
+ 		if (auto_explain_log_analyze && (eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0)
+ 		{
+@@ -371,6 +390,7 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
+ 	{
+ 		MemoryContext oldcxt;
+ 		double		msec;
++		double		normalized_error = -1.0;
+ 
+ 		/*
+ 		 * Make sure we operate in the per-query context, so any cruft will be
+@@ -384,13 +404,22 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
+ 		 */
+ 		InstrEndLoop(queryDesc->totaltime);
+ 
++		if (!(queryDesc->estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY))
++			normalized_error = scour_prediction_underestimation(
++												queryDesc->planstate,
++												queryDesc->totaltime->total);
++
+ 		/* Log plan if duration is exceeded. */
+ 		msec = queryDesc->totaltime->total * 1000.0;
+-		if (msec >= auto_explain_log_min_duration)
++		if ((auto_explain_log_min_duration >= 0 &&
++			msec >= auto_explain_log_min_duration) ||
++			(auto_explain_log_min_error >= 0 &&
++			normalized_error >= auto_explain_log_min_error))
+ 		{
+ 			ExplainState *es = NewExplainState();
+ 
+-			es->analyze = (queryDesc->instrument_options && auto_explain_log_analyze);
++			es->analyze = (queryDesc->instrument_options &&
++				(auto_explain_log_analyze || auto_explain_log_min_error >= 0.0));
+ 			es->verbose = auto_explain_log_verbose;
+ 			es->buffers = (es->analyze && auto_explain_log_buffers);
+ 			es->wal = (es->analyze && auto_explain_log_wal);
+@@ -427,8 +456,8 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
+ 			 * often result in duplication.
+ 			 */
+ 			ereport(auto_explain_log_level,
+-					(errmsg("duration: %.3f ms  plan:\n%s",
+-							msec, es->str->data),
++					(errmsg("duration: %.3f ms, relative error: %.4lf  plan:\n%s",
++							msec, normalized_error, es->str->data),
+ 					 errhidestmt(true)));
+ 		}
+ 
+diff --git a/contrib/pg_stat_statements/Makefile b/contrib/pg_stat_statements/Makefile
+index aecd1d6a2a..bc4f0546da 100644
+--- a/contrib/pg_stat_statements/Makefile
++++ b/contrib/pg_stat_statements/Makefile
+@@ -8,6 +8,7 @@ OBJS = \
+ EXTENSION = pg_stat_statements
+ DATA = pg_stat_statements--1.4.sql \
+ 	pg_stat_statements--1.10--1.11.sql \
++	pg_stat_statements--1.11--1.12.sql \
+ 	pg_stat_statements--1.9--1.10.sql pg_stat_statements--1.8--1.9.sql \
+ 	pg_stat_statements--1.7--1.8.sql pg_stat_statements--1.6--1.7.sql \
+ 	pg_stat_statements--1.5--1.6.sql pg_stat_statements--1.4--1.5.sql \
+diff --git a/contrib/pg_stat_statements/expected/oldextversions.out b/contrib/pg_stat_statements/expected/oldextversions.out
+index ec317b0d6b..7c49f624b8 100644
+--- a/contrib/pg_stat_statements/expected/oldextversions.out
++++ b/contrib/pg_stat_statements/expected/oldextversions.out
+@@ -312,6 +312,71 @@ SELECT count(*) > 0 AS has_data FROM pg_stat_statements;
+  t
+ (1 row)
+ 
++-- New functions and views for pg_stat_statements in 1.12
++ALTER EXTENSION pg_stat_statements UPDATE TO '1.12';
++\d pg_stat_statements
++                          View "public.pg_stat_statements"
++         Column         |           Type           | Collation | Nullable | Default 
++------------------------+--------------------------+-----------+----------+---------
++ userid                 | oid                      |           |          | 
++ dbid                   | oid                      |           |          | 
++ toplevel               | boolean                  |           |          | 
++ queryid                | bigint                   |           |          | 
++ query                  | text                     |           |          | 
++ plans                  | bigint                   |           |          | 
++ total_plan_time        | double precision         |           |          | 
++ min_plan_time          | double precision         |           |          | 
++ max_plan_time          | double precision         |           |          | 
++ mean_plan_time         | double precision         |           |          | 
++ stddev_plan_time       | double precision         |           |          | 
++ calls                  | bigint                   |           |          | 
++ total_exec_time        | double precision         |           |          | 
++ min_exec_time          | double precision         |           |          | 
++ max_exec_time          | double precision         |           |          | 
++ mean_exec_time         | double precision         |           |          | 
++ stddev_exec_time       | double precision         |           |          | 
++ rows                   | bigint                   |           |          | 
++ shared_blks_hit        | bigint                   |           |          | 
++ shared_blks_read       | bigint                   |           |          | 
++ shared_blks_dirtied    | bigint                   |           |          | 
++ shared_blks_written    | bigint                   |           |          | 
++ local_blks_hit         | bigint                   |           |          | 
++ local_blks_read        | bigint                   |           |          | 
++ local_blks_dirtied     | bigint                   |           |          | 
++ local_blks_written     | bigint                   |           |          | 
++ temp_blks_read         | bigint                   |           |          | 
++ temp_blks_written      | bigint                   |           |          | 
++ shared_blk_read_time   | double precision         |           |          | 
++ shared_blk_write_time  | double precision         |           |          | 
++ local_blk_read_time    | double precision         |           |          | 
++ local_blk_write_time   | double precision         |           |          | 
++ temp_blk_read_time     | double precision         |           |          | 
++ temp_blk_write_time    | double precision         |           |          | 
++ wal_records            | bigint                   |           |          | 
++ wal_fpi                | bigint                   |           |          | 
++ wal_bytes              | numeric                  |           |          | 
++ jit_functions          | bigint                   |           |          | 
++ jit_generation_time    | double precision         |           |          | 
++ jit_inlining_count     | bigint                   |           |          | 
++ jit_inlining_time      | double precision         |           |          | 
++ jit_optimization_count | bigint                   |           |          | 
++ jit_optimization_time  | double precision         |           |          | 
++ jit_emission_count     | bigint                   |           |          | 
++ jit_emission_time      | double precision         |           |          | 
++ jit_deform_count       | bigint                   |           |          | 
++ jit_deform_time        | double precision         |           |          | 
++ stats_since            | timestamp with time zone |           |          | 
++ minmax_stats_since     | timestamp with time zone |           |          | 
++ min_error              | double precision         |           |          | 
++ max_error              | double precision         |           |          | 
++ mean_error             | double precision         |           |          | 
++
++SELECT count(*) > 0 AS has_data FROM pg_stat_statements;
++ has_data 
++----------
++ t
++(1 row)
++
+ -- New parameter minmax_only of pg_stat_statements_reset function
+ SELECT pg_get_functiondef('pg_stat_statements_reset'::regproc);
+                                                                         pg_get_functiondef                                                                         
+diff --git a/contrib/pg_stat_statements/pg_stat_statements--1.11--1.12.sql b/contrib/pg_stat_statements/pg_stat_statements--1.11--1.12.sql
+new file mode 100644
+index 0000000000..4fc2e2d6d3
+--- /dev/null
++++ b/contrib/pg_stat_statements/pg_stat_statements--1.11--1.12.sql
+@@ -0,0 +1,76 @@
++/* contrib/pg_stat_statements/pg_stat_statements--1.11--1.12.sql */
++
++-- complain if script is sourced in psql, rather than via ALTER EXTENSION
++\echo Use "ALTER EXTENSION pg_stat_statements UPDATE TO '1.12'" to load this file. \quit
++
++/* First we have to remove them from the extension */
++ALTER EXTENSION pg_stat_statements DROP VIEW pg_stat_statements;
++ALTER EXTENSION pg_stat_statements DROP FUNCTION pg_stat_statements(boolean);
++
++/* Then we can drop them */
++DROP VIEW pg_stat_statements;
++DROP FUNCTION pg_stat_statements(boolean);
++
++/* Now redefine */
++CREATE FUNCTION pg_stat_statements(IN showtext boolean,
++    OUT userid oid,
++    OUT dbid oid,
++    OUT toplevel bool,
++    OUT queryid bigint,
++    OUT query text,
++    OUT plans int8,
++    OUT total_plan_time float8,
++    OUT min_plan_time float8,
++    OUT max_plan_time float8,
++    OUT mean_plan_time float8,
++    OUT stddev_plan_time float8,
++    OUT calls int8,
++    OUT total_exec_time float8,
++    OUT min_exec_time float8,
++    OUT max_exec_time float8,
++    OUT mean_exec_time float8,
++    OUT stddev_exec_time float8,
++    OUT rows int8,
++    OUT shared_blks_hit int8,
++    OUT shared_blks_read int8,
++    OUT shared_blks_dirtied int8,
++    OUT shared_blks_written int8,
++    OUT local_blks_hit int8,
++    OUT local_blks_read int8,
++    OUT local_blks_dirtied int8,
++    OUT local_blks_written int8,
++    OUT temp_blks_read int8,
++    OUT temp_blks_written int8,
++    OUT shared_blk_read_time float8,
++    OUT shared_blk_write_time float8,
++    OUT local_blk_read_time float8,
++    OUT local_blk_write_time float8,
++    OUT temp_blk_read_time float8,
++    OUT temp_blk_write_time float8,
++    OUT wal_records int8,
++    OUT wal_fpi int8,
++    OUT wal_bytes numeric,
++    OUT jit_functions int8,
++    OUT jit_generation_time float8,
++    OUT jit_inlining_count int8,
++    OUT jit_inlining_time float8,
++    OUT jit_optimization_count int8,
++    OUT jit_optimization_time float8,
++    OUT jit_emission_count int8,
++    OUT jit_emission_time float8,
++    OUT jit_deform_count int8,
++    OUT jit_deform_time float8,
++    OUT stats_since timestamp with time zone,
++    OUT minmax_stats_since timestamp with time zone,
++	OUT min_error float8,
++	OUT max_error float8,
++	OUT mean_error float8
++)
++RETURNS SETOF record
++AS 'MODULE_PATHNAME', 'pg_stat_statements_1_12'
++LANGUAGE C STRICT VOLATILE PARALLEL SAFE;
++
++CREATE VIEW pg_stat_statements AS
++  SELECT * FROM pg_stat_statements(true);
++
++GRANT SELECT ON pg_stat_statements TO PUBLIC;
+diff --git a/contrib/pg_stat_statements/pg_stat_statements.c b/contrib/pg_stat_statements/pg_stat_statements.c
+index 6f62a531f7..d08739f201 100644
+--- a/contrib/pg_stat_statements/pg_stat_statements.c
++++ b/contrib/pg_stat_statements/pg_stat_statements.c
+@@ -84,7 +84,7 @@ PG_MODULE_MAGIC;
+ #define PGSS_TEXT_FILE	PG_STAT_TMP_DIR "/pgss_query_texts.stat"
+ 
+ /* Magic number identifying the stats file format */
+-static const uint32 PGSS_FILE_HEADER = 0x20220408;
++static const uint32 PGSS_FILE_HEADER = 0x20230407;
+ 
+ /* PostgreSQL major version number, changes in which invalidate all entries */
+ static const uint32 PGSS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
+@@ -112,6 +112,7 @@ typedef enum pgssVersion
+ 	PGSS_V1_9,
+ 	PGSS_V1_10,
+ 	PGSS_V1_11,
++	PGSS_V1_12
+ } pgssVersion;
+ 
+ typedef enum pgssStoreKind
+@@ -203,6 +204,11 @@ typedef struct Counters
+ 	int64		jit_emission_count; /* number of times emission time has been
+ 									 * > 0 */
+ 	double		jit_emission_time;	/* total time to emit jit code */
++
++	double		min_error;
++	double		max_error;
++	double		mean_error;
++	double		error_counter;
+ } Counters;
+ 
+ /*
+@@ -290,6 +296,7 @@ static int	pgss_track = PGSS_TRACK_TOP;	/* tracking level */
+ static bool pgss_track_utility = true;	/* whether to track utility commands */
+ static bool pgss_track_planning = false;	/* whether to track planning
+ 											 * duration */
++static bool pgss_track_estimation_error = true;	/* whether to track relative error of estimation */
+ static bool pgss_save = true;	/* whether to save stats across shutdown */
+ 
+ 
+@@ -317,6 +324,7 @@ PG_FUNCTION_INFO_V1(pg_stat_statements_1_8);
+ PG_FUNCTION_INFO_V1(pg_stat_statements_1_9);
+ PG_FUNCTION_INFO_V1(pg_stat_statements_1_10);
+ PG_FUNCTION_INFO_V1(pg_stat_statements_1_11);
++PG_FUNCTION_INFO_V1(pg_stat_statements_1_12);
+ PG_FUNCTION_INFO_V1(pg_stat_statements);
+ PG_FUNCTION_INFO_V1(pg_stat_statements_info);
+ 
+@@ -347,7 +355,7 @@ static void pgss_store(const char *query, uint64 queryId,
+ 					   const BufferUsage *bufusage,
+ 					   const WalUsage *walusage,
+ 					   const struct JitInstrumentation *jitusage,
+-					   JumbleState *jstate);
++					   JumbleState *jstate, double normalized_error);
+ static void pg_stat_statements_internal(FunctionCallInfo fcinfo,
+ 										pgssVersion api_version,
+ 										bool showtext);
+@@ -443,6 +451,17 @@ _PG_init(void)
+ 							 NULL,
+ 							 NULL);
+ 
++	DefineCustomBoolVariable("pg_stat_statements.track_estimation_error",
++							 "Selects whether estimation errors of the planner is tracked by pg_stat_statements.",
++							 NULL,
++							 &pgss_track_estimation_error,
++							 true,
++							 PGC_SUSET,
++							 0,
++							 NULL,
++							 NULL,
++							 NULL);
++
+ 	DefineCustomBoolVariable("pg_stat_statements.save",
+ 							 "Save pg_stat_statements statistics across server shutdowns.",
+ 							 NULL,
+@@ -867,7 +886,8 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query, JumbleState *jstate)
+ 				   NULL,
+ 				   NULL,
+ 				   NULL,
+-				   jstate);
++				   jstate,
++				   -1);
+ }
+ 
+ /*
+@@ -952,7 +972,8 @@ pgss_planner(Query *parse,
+ 				   &bufusage,
+ 				   &walusage,
+ 				   NULL,
+-				   NULL);
++				   NULL,
++				   -1);
+ 	}
+ 	else
+ 	{
+@@ -999,6 +1020,11 @@ pgss_ExecutorStart(QueryDesc *queryDesc, int eflags)
+ 	 */
+ 	if (pgss_enabled(nesting_level) && queryDesc->plannedstmt->queryId != UINT64CONST(0))
+ 	{
++		/* Enable instrumentation, if needed */
++		if ((pgss_track_estimation_error && !queryDesc->plannedstmt->utilityStmt) &&
++			(eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0)
++			queryDesc->instrument_options |= INSTRUMENT_TIMER;
++
+ 		/*
+ 		 * Set up to track total elapsed time in ExecutorRun.  Make sure the
+ 		 * space is allocated in the per-query context so it will go away at
+@@ -1069,12 +1095,20 @@ pgss_ExecutorEnd(QueryDesc *queryDesc)
+ 	if (queryId != UINT64CONST(0) && queryDesc->totaltime &&
+ 		pgss_enabled(nesting_level))
+ 	{
++		double normalized_error = -1.0;
++
+ 		/*
+ 		 * Make sure stats accumulation is done.  (Note: it's okay if several
+ 		 * levels of hook all do this.)
+ 		 */
+ 		InstrEndLoop(queryDesc->totaltime);
+ 
++		if (queryDesc->planstate->instrument &&
++			queryDesc->instrument_options & INSTRUMENT_TIMER)
++			normalized_error = scour_prediction_underestimation(
++												queryDesc->planstate,
++												queryDesc->totaltime->total);
++
+ 		pgss_store(queryDesc->sourceText,
+ 				   queryId,
+ 				   queryDesc->plannedstmt->stmt_location,
+@@ -1085,7 +1119,8 @@ pgss_ExecutorEnd(QueryDesc *queryDesc)
+ 				   &queryDesc->totaltime->bufusage,
+ 				   &queryDesc->totaltime->walusage,
+ 				   queryDesc->estate->es_jit ? &queryDesc->estate->es_jit->instr : NULL,
+-				   NULL);
++				   NULL,
++				   normalized_error);
+ 	}
+ 
+ 	if (prev_ExecutorEnd)
+@@ -1216,7 +1251,8 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
+ 				   &bufusage,
+ 				   &walusage,
+ 				   NULL,
+-				   NULL);
++				   NULL,
++				   -1);
+ 	}
+ 	else
+ 	{
+@@ -1277,7 +1313,7 @@ pgss_store(const char *query, uint64 queryId,
+ 		   const BufferUsage *bufusage,
+ 		   const WalUsage *walusage,
+ 		   const struct JitInstrumentation *jitusage,
+-		   JumbleState *jstate)
++		   JumbleState *jstate, double normalized_error)
+ {
+ 	pgssHashKey key;
+ 	pgssEntry  *entry;
+@@ -1407,6 +1443,21 @@ pgss_store(const char *query, uint64 queryId,
+ 			e->counters.min_time[kind] = total_time;
+ 			e->counters.max_time[kind] = total_time;
+ 			e->counters.mean_time[kind] = total_time;
++
++			if (normalized_error >= 0)
++			{
++				e->counters.min_error = normalized_error;
++				e->counters.max_error = normalized_error;
++				e->counters.mean_error = normalized_error;
++				e->counters.error_counter = 1;
++			}
++			else
++			{
++				e->counters.min_error = -1;
++				e->counters.max_error = -1;
++				e->counters.mean_error = -1;
++				e->counters.error_counter = 0;
++			}
+ 		}
+ 		else
+ 		{
+@@ -1438,6 +1489,30 @@ pgss_store(const char *query, uint64 queryId,
+ 				if (e->counters.max_time[kind] < total_time)
+ 					e->counters.max_time[kind] = total_time;
+ 			}
++
++			/*
++			 * Error can't be calculated for some queries. Also, some stranger
++			 * queries can fall into the class occasionally.
++			 * We embrace such cases just to not deface a value of the
++			 * estimation error.
++			 */
++			if (normalized_error >= 0)
++			{
++				/* Calculate mean error */
++				e->counters.error_counter++;
++				old_mean = (e->counters.mean_error >= 0.0) ?
++												e->counters.mean_error : 0.0;
++				e->counters.mean_error +=
++					(normalized_error - old_mean) / e->counters.error_counter;
++
++				/* calculate min and max error */
++				if (e->counters.min_error < 0 ||
++					e->counters.min_error > normalized_error)
++					e->counters.min_error = normalized_error;
++				if (e->counters.max_error < 0 ||
++					e->counters.max_error < normalized_error)
++					e->counters.max_error = normalized_error;
++			}
+ 		}
+ 		e->counters.rows += rows;
+ 		e->counters.shared_blks_hit += bufusage->shared_blks_hit;
+@@ -1548,7 +1623,8 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
+ #define PG_STAT_STATEMENTS_COLS_V1_9	33
+ #define PG_STAT_STATEMENTS_COLS_V1_10	43
+ #define PG_STAT_STATEMENTS_COLS_V1_11	49
+-#define PG_STAT_STATEMENTS_COLS			49	/* maximum of above */
++#define PG_STAT_STATEMENTS_COLS_V1_12	52
++#define PG_STAT_STATEMENTS_COLS			52	/* maximum of above */
+ 
+ /*
+  * Retrieve statement statistics.
+@@ -1560,6 +1636,16 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
+  * expected API version is identified by embedding it in the C name of the
+  * function.  Unfortunately we weren't bright enough to do that for 1.1.
+  */
++Datum
++pg_stat_statements_1_12(PG_FUNCTION_ARGS)
++{
++	bool		showtext = PG_GETARG_BOOL(0);
++
++	pg_stat_statements_internal(fcinfo, PGSS_V1_12, showtext);
++
++	return (Datum) 0;
++}
++
+ Datum
+ pg_stat_statements_1_11(PG_FUNCTION_ARGS)
+ {
+@@ -1704,6 +1790,10 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
+ 			if (api_version != PGSS_V1_11)
+ 				elog(ERROR, "incorrect number of output arguments");
+ 			break;
++		case PG_STAT_STATEMENTS_COLS_V1_12:
++			if (api_version != PGSS_V1_12)
++				elog(ERROR, "incorrect number of output arguments");
++			break;
+ 		default:
+ 			elog(ERROR, "incorrect number of output arguments");
+ 	}
+@@ -1952,6 +2042,12 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
+ 			values[i++] = TimestampTzGetDatum(stats_since);
+ 			values[i++] = TimestampTzGetDatum(minmax_stats_since);
+ 		}
++		if (api_version >= PGSS_V1_12)
++		{
++			values[i++] = Float8GetDatumFast(tmp.min_error);
++			values[i++] = Float8GetDatumFast(tmp.max_error);
++			values[i++] = Float8GetDatumFast(tmp.mean_error);
++		}
+ 
+ 		Assert(i == (api_version == PGSS_V1_0 ? PG_STAT_STATEMENTS_COLS_V1_0 :
+ 					 api_version == PGSS_V1_1 ? PG_STAT_STATEMENTS_COLS_V1_1 :
+@@ -1961,6 +2057,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
+ 					 api_version == PGSS_V1_9 ? PG_STAT_STATEMENTS_COLS_V1_9 :
+ 					 api_version == PGSS_V1_10 ? PG_STAT_STATEMENTS_COLS_V1_10 :
+ 					 api_version == PGSS_V1_11 ? PG_STAT_STATEMENTS_COLS_V1_11 :
++					 api_version == PGSS_V1_12 ? PG_STAT_STATEMENTS_COLS_V1_12 :
+ 					 -1 /* fail if you forget to update this assert */ ));
+ 
+ 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+diff --git a/contrib/pg_stat_statements/sql/oldextversions.sql b/contrib/pg_stat_statements/sql/oldextversions.sql
+index ec06caa5dd..3c0b5d2c5b 100644
+--- a/contrib/pg_stat_statements/sql/oldextversions.sql
++++ b/contrib/pg_stat_statements/sql/oldextversions.sql
+@@ -52,6 +52,11 @@ SELECT count(*) > 0 AS has_data FROM pg_stat_statements;
+ AlTER EXTENSION pg_stat_statements UPDATE TO '1.11';
+ \d pg_stat_statements
+ SELECT count(*) > 0 AS has_data FROM pg_stat_statements;
++
++-- New functions and views for pg_stat_statements in 1.12
++ALTER EXTENSION pg_stat_statements UPDATE TO '1.12';
++\d pg_stat_statements
++SELECT count(*) > 0 AS has_data FROM pg_stat_statements;
+ -- New parameter minmax_only of pg_stat_statements_reset function
+ SELECT pg_get_functiondef('pg_stat_statements_reset'::regproc);
+ 
+diff --git a/doc/src/sgml/pgstatstatements.sgml b/doc/src/sgml/pgstatstatements.sgml
+index 44dd4db7ce..8e750174f1 100644
+--- a/doc/src/sgml/pgstatstatements.sgml
++++ b/doc/src/sgml/pgstatstatements.sgml
+@@ -548,6 +548,34 @@
+        <structfield>max_exec_time</structfield>)
+       </para></entry>
+      </row>
++     <row>
++      <entry role="catalog_table_entry"><para role="column_definition">
++       <structfield>max_error</structfield> <type>double precision</type>
++      </para>
++      <para>
++       Maximum relative error of planner estimation. -1 means error calculation
++	   make no sense here.
++      </para></entry>
++     </row>
++     <row>
++      <entry role="catalog_table_entry"><para role="column_definition">
++       <structfield>min_error</structfield> <type>double precision</type>
++      </para>
++      <para>
++       Minimum relative error of planner estimation. -1 means error calculation
++	   make no sense here.
++      </para></entry>
++     </row>
++     <row>
++      <entry role="catalog_table_entry"><para role="column_definition">
++       <structfield>mean_error</structfield> <type>double precision</type>
++      </para>
++      <para>
++       Mean relative error of planner estimation. -1 means error calculation
++	   make no sense here.
++      </para></entry>
++     </row>
++
+     </tbody>
+    </tgroup>
+   </table>
+diff --git a/src/backend/commands/explain.c b/src/backend/commands/explain.c
+index f1d71bc54e..bb5bb867e5 100644
+--- a/src/backend/commands/explain.c
++++ b/src/backend/commands/explain.c
+@@ -1665,6 +1665,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
+ 		double		total_ms = 1000.0 * planstate->instrument->total / nloops;
+ 		double		rows = planstate->instrument->ntuples / nloops;
+ 
++		Assert(planstate->instrument->finished >= TS_NOT_APPLICABLE &&
++			   planstate->instrument->finished <= TS_LOOP_FINISHED);
++
+ 		if (es->format == EXPLAIN_FORMAT_TEXT)
+ 		{
+ 			if (es->timing)
+@@ -1675,6 +1678,16 @@ ExplainNode(PlanState *planstate, List *ancestors,
+ 				appendStringInfo(es->str,
+ 								 " (actual rows=%.0f loops=%.0f)",
+ 								 rows, nloops);
++
++			if (es->verbose)
++			{
++				if (planstate->instrument->finished == TS_IN_ACTION)
++					appendStringInfoString(es->str, " (early terminated)");
++				else
++				{
++					/* Don't make a noise in a common case */
++				}
++			}
+ 		}
+ 		else
+ 		{
+@@ -1687,6 +1700,17 @@ ExplainNode(PlanState *planstate, List *ancestors,
+ 			}
+ 			ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+ 			ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
++
++			if (es->verbose)
++			{
++				if (planstate->instrument->finished == TS_IN_ACTION)
++					ExplainPropertyText("Termination Status",
++										"early terminated", es);
++				else
++				{
++					/* Don't make a noise in a common case */
++				}
++			}
+ 		}
+ 	}
+ 	else if (es->analyze)
+diff --git a/src/backend/executor/execAsync.c b/src/backend/executor/execAsync.c
+index 5c04db6639..3663c7e4e7 100644
+--- a/src/backend/executor/execAsync.c
++++ b/src/backend/executor/execAsync.c
+@@ -89,7 +89,7 @@ ExecAsyncNotify(AsyncRequest *areq)
+ {
+ 	/* must provide our own instrumentation support */
+ 	if (areq->requestee->instrument)
+-		InstrStartNode(areq->requestee->instrument);
++		InstrStartNodeExecution(areq->requestee->instrument);
+ 
+ 	switch (nodeTag(areq->requestee))
+ 	{
+@@ -106,7 +106,7 @@ ExecAsyncNotify(AsyncRequest *areq)
+ 
+ 	/* must provide our own instrumentation support */
+ 	if (areq->requestee->instrument)
+-		InstrStopNode(areq->requestee->instrument,
++		InstrStopNodeExecution(areq->requestee->instrument,
+ 					  TupIsNull(areq->result) ? 0.0 : 1.0);
+ }
+ 
+diff --git a/src/backend/executor/execProcnode.c b/src/backend/executor/execProcnode.c
+index b4b5c562c0..ab435cdc62 100644
+--- a/src/backend/executor/execProcnode.c
++++ b/src/backend/executor/execProcnode.c
+@@ -475,11 +475,11 @@ ExecProcNodeInstr(PlanState *node)
+ {
+ 	TupleTableSlot *result;
+ 
+-	InstrStartNode(node->instrument);
++	InstrStartNodeExecution(node->instrument);
+ 
+ 	result = node->ExecProcNodeReal(node);
+ 
+-	InstrStopNode(node->instrument, TupIsNull(result) ? 0.0 : 1.0);
++	InstrStopNodeExecution(node->instrument, TupIsNull(result) ? 0.0 : 1.0);
+ 
+ 	return result;
+ }
+diff --git a/src/backend/executor/execUtils.c b/src/backend/executor/execUtils.c
+index 16704c0c2f..e4edad04bb 100644
+--- a/src/backend/executor/execUtils.c
++++ b/src/backend/executor/execUtils.c
+@@ -45,6 +45,8 @@
+ 
+ #include "postgres.h"
+ 
++#include <math.h>
++
+ #include "access/parallel.h"
+ #include "access/relscan.h"
+ #include "access/table.h"
+@@ -57,6 +59,7 @@
+ #include "mb/pg_wchar.h"
+ #include "miscadmin.h"
+ #include "nodes/nodeFuncs.h"
++#include "optimizer/optimizer.h"
+ #include "parser/parsetree.h"
+ #include "parser/parse_relation.h"
+ #include "partitioning/partdesc.h"
+@@ -1408,3 +1411,155 @@ ExecGetResultRelCheckAsUser(ResultRelInfo *relInfo, EState *estate)
+ 
+ 	return perminfo->checkAsUser ? perminfo->checkAsUser : GetUserId();
+ }
++
++typedef struct scour_context
++{
++	double	error;
++	double	totaltime;
++	int		nnodes;
++	int 	counter; /* Used to detect leaf nodes. */
++} scour_context;
++
++static bool
++prediction_walker(PlanState *pstate, void *context)
++{
++	double			plan_rows,
++					real_rows = 0;
++	scour_context  *ctx = (scour_context *) context;
++	bool			is_finished;
++	double			relative_time;
++	double			nloops;
++	int				tmp_counter;
++
++	/* At first, increment the counter */
++	ctx->counter++;
++
++	tmp_counter = ctx->counter;
++	planstate_tree_walker(pstate, prediction_walker, context);
++
++	/*
++	 * Finish the node before an analysis. And only after that we can touch any
++	 * instrument fields.
++	 */
++	InstrEndLoop(pstate->instrument);
++	nloops = pstate->instrument->nloops;
++	is_finished = (pstate->instrument->finished != TS_IN_ACTION);
++
++	if (nloops <= 0.0 || pstate->instrument->total == 0.0)
++		/*
++		 * Skip 'never executed' case and the case of manual switching off of
++		 * the timing instrumentation
++		 */
++		return false;
++
++	/*
++	 * Calculate number of rows predicted by the optimizer and really passed
++	 * through the node. This simplistic code becomes a bit tricky in the case
++	 * of parallel workers.
++	 */
++	if (pstate->worker_instrument)
++	{
++		double	wnloops = 0.;
++		double	wntuples = 0.;
++		double	divisor = pstate->worker_instrument->num_workers;
++		double	leader_contribution;
++		int i;
++
++		/* XXX: Copy-pasted from the get_parallel_divisor() */
++		leader_contribution = 1.0 - (0.3 * divisor);
++		if (leader_contribution > 0)
++			divisor += leader_contribution;
++		plan_rows = pstate->plan->plan_rows * divisor;
++
++		for (i = 0; i < pstate->worker_instrument->num_workers; i++)
++		{
++			double t = pstate->worker_instrument->instrument[i].ntuples;
++			double l = pstate->worker_instrument->instrument[i].nloops;
++
++			if (l <= 0.0)
++			{
++				/*
++				 * Worker could start but not to process any tuples just because
++				 * of laziness. Skip such a node.
++				 */
++				continue;
++			}
++
++			if (pstate->worker_instrument->instrument[i].finished == TS_IN_ACTION)
++				is_finished = false;
++
++			wntuples += t;
++
++			if (tmp_counter == ctx->counter)
++				wntuples += pstate->worker_instrument->instrument[i].nfiltered1 +
++							pstate->worker_instrument->instrument[i].nfiltered2 +
++							pstate->instrument->ntuples2;
++
++			wnloops += l;
++			real_rows += t/l;
++		}
++
++		Assert(nloops >= wnloops);
++
++		/* Calculate the part of job have made by the main process */
++		if (nloops - wnloops > 0.0)
++		{
++			double	ntuples = pstate->instrument->ntuples;
++
++			/* In leaf nodes we should get into account filtered tuples */
++			if (tmp_counter == ctx->counter)
++				ntuples += (pstate->instrument->nfiltered1 +
++												pstate->instrument->nfiltered2 +
++												pstate->instrument->ntuples2);
++
++			Assert(ntuples >= wntuples);
++			real_rows += (ntuples - wntuples) / (nloops - wnloops);
++		}
++	}
++	else
++	{
++		plan_rows = pstate->plan->plan_rows;
++		real_rows = pstate->instrument->ntuples / nloops;
++
++		/* In leaf nodes we should get into account filtered tuples */
++		if (tmp_counter == ctx->counter)
++			real_rows += (pstate->instrument->nfiltered1 +
++									pstate->instrument->nfiltered2 +
++									pstate->instrument->ntuples2) / nloops;
++	}
++
++	plan_rows = clamp_row_est(plan_rows);
++	real_rows = clamp_row_est(real_rows);
++
++	/* Skip 'Early Terminated' case, if no useful information can be gathered */
++	if (!is_finished && real_rows < plan_rows)
++		/*
++		 * In the case, when instrumentation is in NOT APPLICABLE state, we
++		 * still use its data because MultiExec nodes finish the job in one
++		 * execution call.
++		 */
++		return false;
++
++	/*
++	 * Now, we can calculate a value of the estimation relative error has made
++	 * by the optimizer.
++	 */
++	Assert(pstate->instrument->total > 0.0);
++
++	relative_time = pstate->instrument->total /
++									pstate->instrument->nloops / ctx->totaltime;
++	ctx->error += fabs(log(real_rows / plan_rows)) * relative_time;
++	ctx->nnodes++;
++
++	return false;
++}
++
++double
++scour_prediction_underestimation(PlanState *pstate, double totaltime)
++{
++	scour_context	ctx = {.error = 0, .totaltime = totaltime, .nnodes = 0, .counter = 0};
++
++	Assert(totaltime > 0);
++	prediction_walker(pstate, (void *) &ctx);
++	return (ctx.nnodes > 0) ? ctx.error : -1.0;
++}
+diff --git a/src/backend/utils/error/elog.c b/src/backend/utils/error/elog.c
+index 6ea575a53b..f260b5658c 100644
+--- a/src/backend/utils/error/elog.c
++++ b/src/backend/utils/error/elog.c
+@@ -503,6 +503,9 @@ errfinish(const char *filename, int lineno, const char *funcname)
+ 		matches_backtrace_functions(edata->funcname))
+ 		set_backtrace(edata, 2);
+ 
++	if (strstr(edata->message, "unrecognized node type") != NULL)
++		abort();
++
+ 	/*
+ 	 * Call any context callback functions.  Errors occurring in callback
+ 	 * functions will be treated as recursive errors --- this ensures we will
+diff --git a/src/include/executor/executor.h b/src/include/executor/executor.h
+index e1eefb400b..299c9342c1 100644
+--- a/src/include/executor/executor.h
++++ b/src/include/executor/executor.h
+@@ -621,6 +621,7 @@ extern Bitmapset *ExecGetUpdatedCols(ResultRelInfo *relinfo, EState *estate);
+ extern Bitmapset *ExecGetExtraUpdatedCols(ResultRelInfo *relinfo, EState *estate);
+ extern Bitmapset *ExecGetAllUpdatedCols(ResultRelInfo *relinfo, EState *estate);
+ 
++extern double scour_prediction_underestimation(PlanState *pstate, double totaltime);
+ /*
+  * prototypes from functions in execIndexing.c
+  */
+diff --git a/src/include/executor/instrument.h b/src/include/executor/instrument.h
+index d5d69941c5..c853238841 100644
+--- a/src/include/executor/instrument.h
++++ b/src/include/executor/instrument.h
+@@ -65,6 +65,13 @@ typedef enum InstrumentOption
+ 	INSTRUMENT_ALL = PG_INT32_MAX
+ } InstrumentOption;
+ 
++typedef enum TermStatus
++{
++	TS_NOT_APPLICABLE = 0, /* Can be used by some analyzing tools, to skip such a node */
++	TS_IN_ACTION,
++	TS_LOOP_FINISHED
++} TermStatus;
++
+ typedef struct Instrumentation
+ {
+ 	/* Parameters set at node creation: */
+@@ -74,6 +81,7 @@ typedef struct Instrumentation
+ 	bool		async_mode;		/* true if node is in async mode */
+ 	/* Info about current plan cycle: */
+ 	bool		running;		/* true if we've completed first tuple */
++	TermStatus	finished;		/* true, if we have finished loop of the node scanning */
+ 	instr_time	starttime;		/* start time of current iteration of node */
+ 	instr_time	counter;		/* accumulated runtime for this node */
+ 	double		firsttuple;		/* time for first tuple of this cycle */
+@@ -101,6 +109,22 @@ typedef struct WorkerInstrumentation
+ extern PGDLLIMPORT BufferUsage pgBufferUsage;
+ extern PGDLLIMPORT WalUsage pgWalUsage;
+ 
++/*
++ * Just to reduce invasiveness of solution.
++ */
++ #define InstrStartNodeExecution(instr) \
++	{ \
++		InstrStartNode(instr); \
++		instr->finished = TS_IN_ACTION; \
++	}
++
++#define InstrStopNodeExecution(instr, ntuples) \
++	{ \
++		InstrStopNode(instr, ntuples); \
++		if (!instr->async_mode && (ntuples) < 1.0) \
++			instr->finished = TS_LOOP_FINISHED; \
++	}
++
+ extern Instrumentation *InstrAlloc(int n, int instrument_options,
+ 								   bool async_mode);
+ extern void InstrInit(Instrumentation *instr, int instrument_options);
+-- 
+2.43.0
+
