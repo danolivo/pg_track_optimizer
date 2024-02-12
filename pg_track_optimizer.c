@@ -18,9 +18,12 @@
 
 #include "commands/explain.h"
 #include "executor/executor.h"
+#include "lib/dshash.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/queryjumble.h"
 #include "optimizer/optimizer.h"
+#include "storage/dsm_registry.h"
+#include "storage/lwlock.h"
 #include "utils/guc.h"
 
 PG_MODULE_MAGIC;
@@ -31,13 +34,79 @@ PG_MODULE_MAGIC;
 	((eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0) \
 	)
 
+#define DATATBL_NCOLS	(2)
+
+typedef struct TODSMRegistry
+{
+	LWLock				lock;
+	dshash_table	   *htab;
+	dsa_handle			dsah;
+	dshash_table_handle	dshh;
+
+	pg_atomic_uint32	htab_counter;
+} TODSMRegistry;
+
+typedef struct DSMOptimizerTrackerEntry
+{
+	uint64 queryId;
+
+	double relative_error;
+} DSMOptimizerTrackerEntry;
+
+static const dshash_parameters dsh_params = {
+	sizeof(uint64),
+	sizeof(DSMOptimizerTrackerEntry),
+	dshash_memcmp,
+	dshash_memhash,
+	LWTRANCHE_PGSTATS_HASH
+};
+
+static TODSMRegistry *shared = NULL;
+static dsa_area *htab_dsa = NULL;
+static dshash_table *htab = NULL;
+
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 static double log_min_error = 0;
+static int hash_mem = 4096;
 
 void _PG_init(void);
 
 static double track_prediction_estimation(PlanState *pstate, double totaltime);
+static void to_init_shmem(void *ptr);
+
+/*
+ * Using DSM for shared memory segments we need to check attachment at each
+ * point where we are going to use it.
+ */
+static void
+track_attach_shmem(void)
+{
+	bool			found;
+	MemoryContext	mctx;
+
+	if (htab != NULL)
+		return;
+
+	mctx = MemoryContextSwitchTo(TopMemoryContext);
+
+	shared = GetNamedDSMSegment("pg_track_optimizer",
+								   sizeof(TODSMRegistry),
+								   to_init_shmem,
+								   &found);
+
+	if (found)
+	{
+		Assert(shared->dshh != DSHASH_HANDLE_INVALID);
+
+		htab_dsa = dsa_attach(shared->dsah);
+		/* Attach to existed hash table */
+		htab = dshash_attach(htab_dsa, &dsh_params, shared->dshh, NULL);
+	}
+
+	dsa_pin_mapping(htab_dsa);
+	MemoryContextSwitchTo(mctx);
+}
 
 /*
  * Here we need it to enable instrumentation.
@@ -45,6 +114,8 @@ static double track_prediction_estimation(PlanState *pstate, double totaltime);
 static void
 explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
+	track_attach_shmem();
+
 	if (track_optimizer_enabled(eflags))
 		queryDesc->instrument_options |= INSTRUMENT_TIMER | INSTRUMENT_ROWS;
 
@@ -116,11 +187,42 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 			 errhidestmt(true)));
 }
 
+/*
+ * Returns false if memory limit was exceeded.
+ */
+static bool
+store_data(QueryDesc *queryDesc, double normalized_error)
+{
+	DSMOptimizerTrackerEntry   *entry;
+	bool						found;
+	uint32						counter;
+
+	Assert(htab != NULL && queryDesc->plannedstmt->queryId != UINT64CONST(0));
+
+	counter = pg_atomic_read_u32(&shared->htab_counter);
+
+	if (counter == UINT32_MAX ||
+		counter * sizeof(DSMOptimizerTrackerEntry) > hash_mem)
+		/* TODO: set status of full hash table */
+		return false;
+
+	entry = dshash_find_or_insert(htab, &queryDesc->plannedstmt->queryId, &found);
+	entry->relative_error = normalized_error;
+	dshash_release_lock(htab, entry);
+
+	if (!found)
+		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
+
+	return true;
+}
+
 static void
 track_ExecutorEnd(QueryDesc *queryDesc)
 {
 	MemoryContext	oldcxt;
 	double			normalized_error = -1.0;
+
+	track_attach_shmem();
 
 	if (!queryDesc->totaltime ||
 		!track_optimizer_enabled(queryDesc->estate->es_top_eflags) ||
@@ -152,8 +254,13 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	normalized_error = track_prediction_estimation(queryDesc->planstate,
 												   queryDesc->totaltime->total);
 
-	if (normalized_error >= 0.0)
+	Assert(log_min_error >= 0.0);
+	if (normalized_error >= log_min_error)
+	{
+		store_data(queryDesc, normalized_error);
 		_explain_statement(queryDesc, normalized_error);
+	}
+
 	MemoryContextSwitchTo(oldcxt);
 
 end:
@@ -161,6 +268,29 @@ end:
 		prev_ExecutorEnd(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
+}
+
+/*
+ * First-time initialization code. Secured by the lock on DSM registry.
+ */
+static void
+to_init_shmem(void *ptr)
+{
+	TODSMRegistry	   *state = (TODSMRegistry *) ptr;
+	int					tranche_id; /* dshash tranche */
+
+	Assert(htab_dsa == NULL && htab == NULL);
+
+	LWLockInitialize(&state->lock, LWLockNewTrancheId());
+
+	tranche_id = LWLockNewTrancheId();
+	LWLockRegisterTranche(tranche_id, "pg_track_optimizer_tranche");
+	htab_dsa = dsa_create(tranche_id);
+	state->dsah = dsa_get_handle(htab_dsa);
+	dsa_pin(htab_dsa);
+	htab = dshash_create(htab_dsa, &dsh_params, 0);
+	state->dshh = dshash_get_hash_table_handle(htab);
+	pg_atomic_init_u32(&state->htab_counter, 0);
 }
 
 void
@@ -179,10 +309,22 @@ _PG_init(void)
 							 0,
 							 -1, INT_MAX, /* Looks like so huge error, as INT_MAX don't make a sense */
 							 PGC_SUSET,
-							 GUC_UNIT_MS,
+							 0,
 							 NULL,
 							 NULL,
 							 NULL);
+
+	DefineCustomIntVariable("pg_track_optimizer.hash_mem",
+							"Max size of DSM memory allocated to hash table",
+							NULL,
+							&hash_mem,
+							4096,
+							0, INT_MAX,
+							PGC_SUSET,
+							GUC_UNIT_KB,
+							NULL,
+							NULL,
+							NULL);
 
 	MarkGUCPrefixReserved("pg_track_optimizer");
 
@@ -330,4 +472,77 @@ track_prediction_estimation(PlanState *pstate, double totaltime)
 	Assert(totaltime > 0);
 	(void) prediction_walker(pstate, (void *) &ctx);
 	return (ctx.nnodes > 0) ? ctx.error : -1.0;
+}
+
+/* -----------------------------------------------------------------------------
+ *
+ * UI routines
+ *
+ */
+
+#include "funcapi.h"
+#include "miscadmin.h"
+
+static void
+_init_rsinfo(PG_FUNCTION_ARGS, ReturnSetInfo *rsinfo, int total_ncols)
+{
+	MemoryContext	 oldcontext;
+	TupleDesc		 tup_desc;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not allowed in this context")));
+
+	/* Switch into long-lived context to construct returned data structures */
+	oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tup_desc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	if (tup_desc->natts != total_ncols)
+		elog(ERROR, "incorrect number of output arguments");
+
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->setDesc = tup_desc;
+
+	MemoryContextSwitchTo(oldcontext);
+}
+
+PG_FUNCTION_INFO_V1(to_show_data);
+
+Datum
+to_show_data(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo			   *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	Datum						values[DATATBL_NCOLS];
+	bool						nulls[DATATBL_NCOLS];
+	dshash_seq_status			stat;
+	DSMOptimizerTrackerEntry   *entry;
+
+	track_attach_shmem();
+
+	LWLockAcquire(&shared->lock, LW_SHARED);
+	_init_rsinfo(fcinfo, rsinfo, DATATBL_NCOLS);
+
+	dshash_seq_init(&stat, htab, true);
+	while ((entry = dshash_seq_next(&stat)) != NULL)
+	{
+		Assert(entry->queryId != UINT64CONST(0));
+
+		memset(nulls, 0, DATATBL_NCOLS);
+		values[0] = Int64GetDatum(entry->queryId);
+		values[1] = Float8GetDatum(entry->relative_error);
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+	}
+	dshash_seq_term(&stat);
+	LWLockRelease(&shared->lock);
+	return (Datum) 0;
 }

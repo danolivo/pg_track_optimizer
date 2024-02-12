@@ -1,0 +1,11 @@
+
+-- complain if script is sourced in psql, rather than via CREATE EXTENSION
+\echo Use "CREATE EXTENSION pg_stat_optimizer" to load this file. \quit
+
+CREATE OR REPLACE FUNCTION pg_stat_optimizer(
+	OUT queryid			bigint,
+	OUT relative_error	float8
+)
+RETURNS setof record
+AS 'MODULE_PATHNAME', 'to_show_data'
+LANGUAGE C STRICT VOLATILE;

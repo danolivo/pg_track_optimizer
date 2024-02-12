@@ -9,6 +9,8 @@ PGFILEDESC = "pg_track_optimizer - track planning decisions"
 EXTENSION = pg_track_optimizer
 EXTVERSION = 0.1
 
+DATA = pg_track_optimizer--0.1.sql
+
 ifdef USE_PGXS
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
