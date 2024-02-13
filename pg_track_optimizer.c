@@ -16,6 +16,7 @@
 
 #include "postgres.h"
 
+#include "access/parallel.h"
 #include "commands/explain.h"
 #include "executor/executor.h"
 #include "funcapi.h"
@@ -33,8 +34,8 @@ PG_MODULE_MAGIC;
 
 #define track_optimizer_enabled(eflags) \
 	( \
-	IsQueryIdEnabled() && \
-	!IsA(queryDesc->plannedstmt, ExplainStmt) && \
+	IsQueryIdEnabled() && !IsParallelWorker() && \
+	queryDesc->plannedstmt->utilityStmt == NULL && \
 	(log_min_error >= 0. || track_mode == TRACK_MODE_FORCED) && \
 	track_mode != TRACK_MODE_DISABLED && \
 	((eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0) \
