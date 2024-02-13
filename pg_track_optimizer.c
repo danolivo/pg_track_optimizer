@@ -18,7 +18,9 @@
 
 #include "commands/explain.h"
 #include "executor/executor.h"
+#include "funcapi.h"
 #include "lib/dshash.h"
+#include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/queryjumble.h"
 #include "optimizer/optimizer.h"
@@ -30,7 +32,9 @@ PG_MODULE_MAGIC;
 
 #define track_optimizer_enabled(eflags) \
 	( \
-	IsQueryIdEnabled() && log_min_error >= 0 && \
+	IsQueryIdEnabled() && \
+	(log_min_error >= 0. || track_mode == TRACK_MODE_FORCED) && \
+	track_mode != TRACK_MODE_DISABLED && \
 	((eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0) \
 	)
 
@@ -67,7 +71,21 @@ static dshash_table *htab = NULL;
 
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
-static double log_min_error = 0;
+
+typedef enum
+{
+	TRACK_MODE_FORCED,
+	TRACK_MODE_DISABLED,
+} TrackMode;
+
+static const struct config_enum_entry format_options[] = {
+	{"forced", TRACK_MODE_FORCED, false},
+	{"disabled", TRACK_MODE_DISABLED, false},
+	{NULL, 0, false}
+};
+
+static int track_mode = TRACK_MODE_DISABLED;
+static double log_min_error = -1.0;
 static int hash_mem = 4096;
 
 void _PG_init(void);
@@ -151,6 +169,9 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 	ExplainState   *es = NewExplainState();
 	double			msec;
 
+	if (log_min_error < 0 || normalized_error < log_min_error)
+		return;
+
 	msec = queryDesc->totaltime->total * 1000.0;
 
 	/*
@@ -199,6 +220,9 @@ store_data(QueryDesc *queryDesc, double normalized_error)
 
 	Assert(htab != NULL && queryDesc->plannedstmt->queryId != UINT64CONST(0));
 
+	if (!(normalized_error >= log_min_error || track_mode == TRACK_MODE_FORCED))
+		return false;
+
 	counter = pg_atomic_read_u32(&shared->htab_counter);
 
 	if (counter == UINT32_MAX ||
@@ -208,10 +232,11 @@ store_data(QueryDesc *queryDesc, double normalized_error)
 
 	entry = dshash_find_or_insert(htab, &queryDesc->plannedstmt->queryId, &found);
 	entry->relative_error = normalized_error;
-	dshash_release_lock(htab, entry);
 
 	if (!found)
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
+
+	dshash_release_lock(htab, entry);
 
 	return true;
 }
@@ -254,12 +279,12 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	normalized_error = track_prediction_estimation(queryDesc->planstate,
 												   queryDesc->totaltime->total);
 
-	Assert(log_min_error >= 0.0);
-	if (normalized_error >= log_min_error)
-	{
-		store_data(queryDesc, normalized_error);
-		_explain_statement(queryDesc, normalized_error);
-	}
+	/*
+	 * Store data in the hash table and/or print it to the log. Decision on what
+	 * to do each routine makes individually.
+	 */
+	store_data(queryDesc, normalized_error);
+	_explain_statement(queryDesc, normalized_error);
 
 	MemoryContextSwitchTo(oldcxt);
 
@@ -302,12 +327,24 @@ _PG_init(void)
 	 */
 	EnableQueryId();
 
+	DefineCustomEnumVariable("pg_track_optimizer.mode",
+							 "Mode of the extension usage.",
+							 NULL,
+							 &track_mode,
+							 TRACK_MODE_DISABLED,
+							 format_options,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
 	DefineCustomRealVariable("pg_track_optimizer.log_min_error",
 							 "Sets the minimum planning error above which plans will be logged.",
 							 "Zero prints all plans. -1 turns this feature off.",
 							 &log_min_error,
-							 0,
-							 -1, INT_MAX, /* Looks like so huge error, as INT_MAX don't make a sense */
+							 -1.0,
+							 -1.0, INT_MAX, /* Looks like so huge error, as INT_MAX don't make a sense */
 							 PGC_SUSET,
 							 0,
 							 NULL,
@@ -480,9 +517,6 @@ track_prediction_estimation(PlanState *pstate, double totaltime)
  *
  */
 
-#include "funcapi.h"
-#include "miscadmin.h"
-
 static void
 _init_rsinfo(PG_FUNCTION_ARGS, ReturnSetInfo *rsinfo, int total_ncols)
 {
@@ -517,6 +551,7 @@ _init_rsinfo(PG_FUNCTION_ARGS, ReturnSetInfo *rsinfo, int total_ncols)
 }
 
 PG_FUNCTION_INFO_V1(to_show_data);
+PG_FUNCTION_INFO_V1(to_reset);
 
 Datum
 to_show_data(PG_FUNCTION_ARGS)
@@ -545,4 +580,39 @@ to_show_data(PG_FUNCTION_ARGS)
 	dshash_seq_term(&stat);
 	LWLockRelease(&shared->lock);
 	return (Datum) 0;
+}
+
+/*
+ * Reset the state of this extension to default. Show clean up all additionally
+ * allocated resources and reset static and global state variables.
+ */
+Datum
+to_reset(PG_FUNCTION_ARGS)
+{
+	dshash_seq_status			stat;
+	DSMOptimizerTrackerEntry   *entry;
+
+	track_attach_shmem();
+
+	/*
+	 * Destroying shared ahsh table is a bit dangerous procedure. Without full
+	 * understanding of the dshash_destroy() technique, delete elements more
+	 * simply, one by one.
+	 */
+	dshash_seq_init(&stat, htab, true);
+	while ((entry = dshash_seq_next(&stat)) != NULL)
+	{
+		uint32 pre;
+
+		Assert(entry->queryId != UINT64CONST(0));
+		dshash_delete_current(&stat);
+		pre = pg_atomic_fetch_sub_u32(&shared->htab_counter, 1);
+
+		if (pre <= 0)
+			/* Trigger a reboot to cleanup the state. No another solution I see */
+			elog(PANIC, "Inconsistency in the pg_track_optimizer hash table state");
+	}
+	dshash_seq_term(&stat);
+
+	PG_RETURN_VOID();
 }
