@@ -4,6 +4,7 @@
 
 CREATE OR REPLACE FUNCTION pg_stat_optimizer(
 	OUT queryid			bigint,
+	OUT querytext       text,
 	OUT relative_error	float8
 )
 RETURNS setof record

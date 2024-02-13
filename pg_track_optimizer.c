@@ -26,6 +26,7 @@
 #include "optimizer/optimizer.h"
 #include "storage/dsm_registry.h"
 #include "storage/lwlock.h"
+#include "utils/builtins.h"
 #include "utils/guc.h"
 
 PG_MODULE_MAGIC;
@@ -33,12 +34,13 @@ PG_MODULE_MAGIC;
 #define track_optimizer_enabled(eflags) \
 	( \
 	IsQueryIdEnabled() && \
+	!IsA(queryDesc->plannedstmt, ExplainStmt) && \
 	(log_min_error >= 0. || track_mode == TRACK_MODE_FORCED) && \
 	track_mode != TRACK_MODE_DISABLED && \
 	((eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0) \
 	)
 
-#define DATATBL_NCOLS	(2)
+#define DATATBL_NCOLS	(3)
 
 typedef struct TODSMRegistry
 {
@@ -55,6 +57,7 @@ typedef struct DSMOptimizerTrackerEntry
 	uint64 queryId;
 
 	double relative_error;
+	dsa_pointer querytext_ptr;
 } DSMOptimizerTrackerEntry;
 
 static const dshash_parameters dsh_params = {
@@ -234,7 +237,19 @@ store_data(QueryDesc *queryDesc, double normalized_error)
 	entry->relative_error = normalized_error;
 
 	if (!found)
+	{
+		size_t	len = strlen(queryDesc->sourceText);
+		char   *strptr;
+
+		/* Put the query string into the shared memory too */
+		entry->querytext_ptr = dsa_allocate(htab_dsa, len + 1);
+		Assert(DsaPointerIsValid(entry->querytext_ptr));
+		strptr = (char *) dsa_get_address(htab_dsa, entry->querytext_ptr);
+		strlcpy(strptr, queryDesc->sourceText, len);
+		strptr[len] = '\0';
+
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
+	}
 
 	dshash_release_lock(htab, entry);
 
@@ -570,12 +585,22 @@ to_show_data(PG_FUNCTION_ARGS)
 	dshash_seq_init(&stat, htab, true);
 	while ((entry = dshash_seq_next(&stat)) != NULL)
 	{
+		int		i = 0;
+		char   *str;
+
 		Assert(entry->queryId != UINT64CONST(0));
 
 		memset(nulls, 0, DATATBL_NCOLS);
-		values[0] = Int64GetDatum(entry->queryId);
-		values[1] = Float8GetDatum(entry->relative_error);
+		values[i++] = Int64GetDatum(entry->queryId);
+
+		/* Query string */
+		Assert(DsaPointerIsValid(entry->querytext_ptr));
+		str = (char *) dsa_get_address(htab_dsa, entry->querytext_ptr);
+		values[i++] = CStringGetTextDatum(str);
+
+		values[i++] = Float8GetDatum(entry->relative_error);
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+		Assert(i == DATATBL_NCOLS);
 	}
 	dshash_seq_term(&stat);
 	LWLockRelease(&shared->lock);
@@ -605,6 +630,11 @@ to_reset(PG_FUNCTION_ARGS)
 		uint32 pre;
 
 		Assert(entry->queryId != UINT64CONST(0));
+
+		/* At first, free memory, allocated for the query text */
+		DsaPointerIsValid(entry->querytext_ptr);
+		dsa_free(htab_dsa, entry->querytext_ptr);
+
 		dshash_delete_current(&stat);
 		pre = pg_atomic_fetch_sub_u32(&shared->htab_counter, 1);
 
