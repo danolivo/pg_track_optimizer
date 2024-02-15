@@ -1,0 +1,52 @@
+CREATE EXTENSION pg_track_optimizer;
+CREATE TABLE pto_test(x integer, y integer, z integer);
+ANALYZE pto_test;
+EXPLAIN (COSTS OFF) SELECT * FROM pto_test WHERE x < 1;
+      QUERY PLAN      
+----------------------
+ Seq Scan on pto_test
+   Filter: (x < 1)
+(2 rows)
+
+SELECT querytext,relative_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs
+FROM pg_stat_optimizer(); -- Nothing to track for plain explain.
+ querytext | ?column? | nodes_assessed | nodes_total | ?column? | nexecs 
+-----------+----------+----------------+-------------+----------+--------
+(0 rows)
+
+EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
+SELECT * FROM pto_test WHERE x < 1;
+                  QUERY PLAN                  
+----------------------------------------------
+ Seq Scan on pto_test (actual rows=0 loops=1)
+   Filter: (x < 1)
+(2 rows)
+
+SELECT querytext,relative_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs
+FROM pg_stat_optimizer(); -- Must see it.
+                                    querytext                                     | ?column? | nodes_assessed | nodes_total | ?column? | nexecs 
+----------------------------------------------------------------------------------+----------+----------------+-------------+----------+--------
+ SELECT querytext,relative_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs+| t        |              1 |           1 | t        |      1
+ FROM pg_stat_optimizer()                                                         |          |                |             |          | 
+ EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)                           +| t        |              1 |           1 | t        |      1
+ SELECT * FROM pto_test WHERE x < 1                                               |          |                |             |          | 
+(2 rows)
+
+-- TODO: Disable storing of queries, involving the extension UI objects
+SELECT * FROM pto_test WHERE x < 1;
+ x | y | z 
+---+---+---
+(0 rows)
+
+-- Must see second execution of the query in nexecs (don't mind EXPLAIN)
+SELECT querytext,relative_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs
+FROM pg_stat_optimizer();
+                                    querytext                                     | ?column? | nodes_assessed | nodes_total | ?column? | nexecs 
+----------------------------------------------------------------------------------+----------+----------------+-------------+----------+--------
+ SELECT querytext,relative_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs+| t        |              1 |           1 | t        |      2
+ FROM pg_stat_optimizer()                                                         |          |                |             |          | 
+ EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)                           +| t        |              1 |           1 | t        |      2
+ SELECT * FROM pto_test WHERE x < 1                                               |          |                |             |          | 
+(2 rows)
+
+DROP EXTENSION pg_track_optimizer;

@@ -41,7 +41,25 @@ PG_MODULE_MAGIC;
 	((eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0) \
 	)
 
-#define DATATBL_NCOLS	(3)
+#define DATATBL_NCOLS	(8)
+
+/*
+ * Data structure used for error estimation as well as for statistics gathering.
+ */
+typedef struct ScourContext
+{
+	double	error;
+	double	totaltime;
+
+	/* Number of nodes assessed */
+	int		nnodes;
+
+	/*
+	 * Total number of nodes in the plan. Originally, used to detect leaf nodes.
+	 * Now, it is a part of statistics.
+	 */
+	int 	counter;
+} ScourContext;
 
 typedef struct TODSMRegistry
 {
@@ -53,16 +71,32 @@ typedef struct TODSMRegistry
 	pg_atomic_uint32	htab_counter;
 } TODSMRegistry;
 
+/*
+ * Key for the tracker hash table.
+ * Forasmuch as impossible to imagine when query could be used in another
+ * database, use the database oid to reduce chance of collision and possible
+ * other filtering options.
+ */
+typedef struct DSMOptimizerTrackerKey
+{
+	Oid			dbOid;
+	uint64		queryId;
+} DSMOptimizerTrackerKey;
+
 typedef struct DSMOptimizerTrackerEntry
 {
-	uint64 queryId;
+	DSMOptimizerTrackerKey	key;
 
-	double relative_error;
-	dsa_pointer querytext_ptr;
+	double					relative_error;
+	dsa_pointer				querytext_ptr;
+	int						assessed_nodes;
+	int						total_nodes;
+	double					exec_time;
+	uint64					nexecs; /* Number of executions have taken into account */
 } DSMOptimizerTrackerEntry;
 
 static const dshash_parameters dsh_params = {
-	sizeof(uint64),
+	sizeof(DSMOptimizerTrackerKey),
 	sizeof(DSMOptimizerTrackerEntry),
 	dshash_memcmp,
 	dshash_memhash,
@@ -94,7 +128,7 @@ static int hash_mem = 4096;
 
 void _PG_init(void);
 
-static double track_prediction_estimation(PlanState *pstate, double totaltime);
+static double track_prediction_estimation(PlanState *pstate, double totaltime, ScourContext *ctx);
 static void to_init_shmem(void *ptr);
 
 /*
@@ -216,9 +250,10 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
  * Returns false if memory limit was exceeded.
  */
 static bool
-store_data(QueryDesc *queryDesc, double normalized_error)
+store_data(QueryDesc *queryDesc, double normalized_error, ScourContext *ctx)
 {
 	DSMOptimizerTrackerEntry   *entry;
+	DSMOptimizerTrackerKey		key;
 	bool						found;
 	uint32						counter;
 
@@ -234,8 +269,14 @@ store_data(QueryDesc *queryDesc, double normalized_error)
 		/* TODO: set status of full hash table */
 		return false;
 
-	entry = dshash_find_or_insert(htab, &queryDesc->plannedstmt->queryId, &found);
+	memset(&key, 0, sizeof(DSMOptimizerTrackerKey));
+	key.dbOid = MyDatabaseId;
+	key.queryId = queryDesc->plannedstmt->queryId;
+	entry = dshash_find_or_insert(htab, &key, &found);
 	entry->relative_error = normalized_error;
+	entry->assessed_nodes = ctx->nnodes;
+	entry->total_nodes = ctx->counter;
+	entry->exec_time = ctx->totaltime;
 
 	if (!found)
 	{
@@ -249,8 +290,11 @@ store_data(QueryDesc *queryDesc, double normalized_error)
 		strlcpy(strptr, queryDesc->sourceText, len);
 		strptr[len] = '\0';
 
+		entry->nexecs = 0;
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
 	}
+
+	entry->nexecs++;
 
 	dshash_release_lock(htab, entry);
 
@@ -262,6 +306,7 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 {
 	MemoryContext	oldcxt;
 	double			normalized_error = -1.0;
+	ScourContext	ctx;
 
 	track_attach_shmem();
 
@@ -293,13 +338,14 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	InstrEndLoop(queryDesc->totaltime);
 
 	normalized_error = track_prediction_estimation(queryDesc->planstate,
-												   queryDesc->totaltime->total);
+												   queryDesc->totaltime->total,
+												   &ctx);
 
 	/*
 	 * Store data in the hash table and/or print it to the log. Decision on what
 	 * to do each routine makes individually.
 	 */
-	store_data(queryDesc, normalized_error);
+	store_data(queryDesc, normalized_error, &ctx);
 	_explain_statement(queryDesc, normalized_error);
 
 	MemoryContextSwitchTo(oldcxt);
@@ -386,14 +432,6 @@ _PG_init(void)
 	prev_ExecutorEnd = ExecutorEnd_hook;
 	ExecutorEnd_hook = track_ExecutorEnd;
 }
-
-typedef struct ScourContext
-{
-	double	error;
-	double	totaltime;
-	int		nnodes;
-	int 	counter; /* Used to detect leaf nodes. */
-} ScourContext;
 
 static bool
 prediction_walker(PlanState *pstate, void *context)
@@ -518,13 +556,16 @@ prediction_walker(PlanState *pstate, void *context)
 }
 
 static double
-track_prediction_estimation(PlanState *pstate, double totaltime)
+track_prediction_estimation(PlanState *pstate, double totaltime, ScourContext *ctx)
 {
-	ScourContext	ctx = {.error = 0, .totaltime = totaltime, .nnodes = 0, .counter = 0};
+	ctx->error = 0;
+	ctx->totaltime = totaltime;
+	ctx->nnodes = 0;
+	ctx->counter = 0;
 
-	Assert(totaltime > 0);
-	(void) prediction_walker(pstate, (void *) &ctx);
-	return (ctx.nnodes > 0) ? ctx.error : -1.0;
+	Assert(totaltime > 0.);
+	(void) prediction_walker(pstate, (void *) ctx);
+	return (ctx->nnodes > 0) ? ctx->error : -1.0;
 }
 
 /* -----------------------------------------------------------------------------
@@ -589,10 +630,12 @@ to_show_data(PG_FUNCTION_ARGS)
 		int		i = 0;
 		char   *str;
 
-		Assert(entry->queryId != UINT64CONST(0));
+		Assert(entry->key.queryId != UINT64CONST(0) &&
+			   OidIsValid(entry->key.dbOid));
 
 		memset(nulls, 0, DATATBL_NCOLS);
-		values[i++] = Int64GetDatum(entry->queryId);
+		values[i++] = ObjectIdGetDatum(entry->key.dbOid);
+		values[i++] = Int64GetDatum(entry->key.queryId);
 
 		/* Query string */
 		Assert(DsaPointerIsValid(entry->querytext_ptr));
@@ -600,6 +643,10 @@ to_show_data(PG_FUNCTION_ARGS)
 		values[i++] = CStringGetTextDatum(str);
 
 		values[i++] = Float8GetDatum(entry->relative_error);
+		values[i++] = Int32GetDatum(entry->assessed_nodes);
+		values[i++] = Int32GetDatum(entry->total_nodes);
+		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
+		values[i++] = Int64GetDatum(entry->nexecs);
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 		Assert(i == DATATBL_NCOLS);
 	}
@@ -630,7 +677,8 @@ to_reset(PG_FUNCTION_ARGS)
 	{
 		uint32 pre;
 
-		Assert(entry->queryId != UINT64CONST(0));
+		Assert(entry->key.queryId != UINT64CONST(0) &&
+			   OidIsValid(entry->key.dbOid));
 
 		/* At first, free memory, allocated for the query text */
 		DsaPointerIsValid(entry->querytext_ptr);
