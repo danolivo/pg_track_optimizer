@@ -26,6 +26,7 @@
 #include "nodes/queryjumble.h"
 #include "optimizer/optimizer.h"
 #include "storage/dsm_registry.h"
+#include "storage/ipc.h"
 #include "storage/lwlock.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
@@ -89,10 +90,10 @@ typedef struct DSMOptimizerTrackerEntry
 
 	double					relative_error;
 	dsa_pointer				querytext_ptr;
-	int						assessed_nodes;
-	int						total_nodes;
+	int32					assessed_nodes;
+	int32					total_nodes;
 	double					exec_time;
-	uint64					nexecs; /* Number of executions have taken into account */
+	int64					nexecs; /* Number of executions have taken into account */
 } DSMOptimizerTrackerEntry;
 
 static const dshash_parameters dsh_params = {
@@ -130,6 +131,9 @@ void _PG_init(void);
 
 static double track_prediction_estimation(PlanState *pstate, double totaltime, ScourContext *ctx);
 static void to_init_shmem(void *ptr);
+static bool _load_hash_table(TODSMRegistry *state);
+static bool _flush_hash_table(void);
+static void on_shmem_shutdown(int code, Datum arg);
 
 /*
  * Using DSM for shared memory segments we need to check attachment at each
@@ -284,11 +288,10 @@ store_data(QueryDesc *queryDesc, double normalized_error, ScourContext *ctx)
 		char   *strptr;
 
 		/* Put the query string into the shared memory too */
-		entry->querytext_ptr = dsa_allocate(htab_dsa, len + 1);
+		entry->querytext_ptr = dsa_allocate0(htab_dsa, len + 1);
 		Assert(DsaPointerIsValid(entry->querytext_ptr));
 		strptr = (char *) dsa_get_address(htab_dsa, entry->querytext_ptr);
 		strlcpy(strptr, queryDesc->sourceText, len);
-		strptr[len] = '\0';
 
 		entry->nexecs = 0;
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
@@ -375,9 +378,14 @@ to_init_shmem(void *ptr)
 	htab_dsa = dsa_create(tranche_id);
 	state->dsah = dsa_get_handle(htab_dsa);
 	dsa_pin(htab_dsa);
+
 	htab = dshash_create(htab_dsa, &dsh_params, 0);
 	state->dshh = dshash_get_hash_table_handle(htab);
 	pg_atomic_init_u32(&state->htab_counter, 0);
+
+	/* Remember to flush the data on exit */
+	before_shmem_exit(on_shmem_shutdown, (Datum) 0);
+	(void) _load_hash_table(state);
 }
 
 void
@@ -694,4 +702,258 @@ to_reset(PG_FUNCTION_ARGS)
 	dshash_seq_term(&stat);
 
 	PG_RETURN_VOID();
+}
+
+/* -----------------------------------------------------------------------------
+ *
+ * Disk operations
+ *
+ * -------------------------------------------------------------------------- */
+
+static const uint32 DATA_FILE_HEADER	= 12354678;
+static const uint32 DATA_FORMAT_VERSION = 1;
+
+	double					relative_error;
+	dsa_pointer				querytext_ptr;
+	int32					assessed_nodes;
+	int32					total_nodes;
+	double					exec_time;
+	int64					nexecs; /* Number of executions have taken into account */
+
+
+static const DSMOptimizerTrackerEntry EOFEntry = {
+											.key.dbOid = 0,
+											.key.queryId = 0,
+											.relative_error = -2.,
+											.querytext_ptr = 0,
+											.assessed_nodes = -1,
+											.total_nodes = -1,
+											.exec_time = -1.,
+											.nexecs = -1
+											};
+#define IsEOFEntry(entry) ( \
+	(entry)->key.dbOid == EOFEntry.key.dbOid && \
+	(entry)->key.queryId == EOFEntry.key.queryId && \
+	(entry)->querytext_ptr == EOFEntry.querytext_ptr && \
+	(entry)->assessed_nodes == EOFEntry.assessed_nodes && \
+	(entry)->total_nodes == EOFEntry.total_nodes && \
+	(entry)->nexecs == EOFEntry.nexecs \
+)
+/*
+	(entry)->nexecs = EOFEntry.nexecs \
+*/
+
+#define EXTENSION_NAME "pg_track_optimizer"
+const char *filename = EXTENSION_NAME".stat";
+
+/*
+ * Specifics of the storage procedure of dshash table:
+ * we don't block the table entirely, so we don't know how many records
+ * will be eventually stored.
+ * Return true in the case of success.
+ */
+static bool
+_flush_hash_table(void)
+{
+	dshash_seq_status			stat;
+	DSMOptimizerTrackerEntry   *entry;
+	char					   *tmpfile = psprintf("%s.tmp", EXTENSION_NAME);
+	FILE					   *file;
+	uint32						counter = 0;
+
+	track_attach_shmem();
+
+	file = AllocateFile(tmpfile, PG_BINARY_W);
+	if (file == NULL)
+		goto error;
+
+	/* Add a header to the file for more reliable identification of the data */
+	if (fwrite(&DATA_FILE_HEADER, sizeof(uint32), 1, file) != 1 ||
+		fwrite(&DATA_FORMAT_VERSION, sizeof(uint32), 1, file) != 1)
+		goto error;
+
+	dshash_seq_init(&stat, htab, true);
+	while ((entry = dshash_seq_next(&stat)) != NULL)
+	{
+		char   *str;
+		uint32	len;
+
+		Assert(entry->key.queryId != UINT64CONST(0) &&
+			   OidIsValid(entry->key.dbOid) &&
+			   DsaPointerIsValid(entry->querytext_ptr));
+
+		str = (char *) dsa_get_address(htab_dsa, entry->querytext_ptr);
+		len = strlen(str);
+
+		/*
+		 * Write data into the file. It is more or less stable procedure:
+		 * I don't think someone will try to save the data on one platform and
+		 * restore it on very different another one.
+		 */
+		if (fwrite(entry, sizeof(DSMOptimizerTrackerEntry), 1, file) != 1 ||
+			fwrite(&len, sizeof(uint32), 1, file) != 1 ||
+			fwrite(str, len, 1, file) != 1)
+			goto error;
+
+		counter++;
+	}
+	dshash_seq_term(&stat);
+
+	/* As a last record write EOF record and a number of records have written */
+	if (fwrite(&EOFEntry, sizeof(DSMOptimizerTrackerEntry), 1, file) != 1 ||
+		fwrite(&counter, sizeof(uint32), 1, file) != 1)
+		goto error;
+
+	if (FreeFile(file))
+	{
+		file = NULL;
+		goto error;
+	}
+
+	(void) durable_rename(tmpfile, filename, LOG);
+	pfree(tmpfile);
+	elog(DEBUG2, "[%s] %u records stored in file %s.",
+		 EXTENSION_NAME, counter, filename);
+	return true;
+
+error:
+	ereport(LOG,
+			(errcode_for_file_access(),
+			 errmsg("could not write %s data file \"%s\": %m",
+			 EXTENSION_NAME, tmpfile)));
+
+	if (file)
+		FreeFile(file);
+	unlink(tmpfile);
+	pfree(tmpfile);
+	return false;
+}
+
+/*
+ * Read data file record by record and add each record into the new table
+ * Provide reference to the shared area because the local pointer still not
+ * initialized.
+ */
+static bool
+_load_hash_table(TODSMRegistry *state)
+{
+	FILE   *file;
+	uint32	header;
+	int32	pgver;
+	uint32	counter = 0;
+	DSMOptimizerTrackerEntry	disk_entry;
+	DSMOptimizerTrackerEntry   *entry;
+elog(WARNING, "START reading");
+	track_attach_shmem();
+
+	file = AllocateFile(filename, PG_BINARY_R);
+	if (file == NULL)
+	{
+		if (errno != ENOENT)
+			goto read_error;
+		/* File not exists */
+		return false;
+	}
+
+	if (fread(&header, sizeof(uint32), 1, file) != 1 ||
+		fread(&pgver, sizeof(uint32), 1, file) != 1)
+		goto read_error;
+	if (header != DATA_FILE_HEADER)
+		goto data_header_error;
+	if (pgver != DATA_FORMAT_VERSION)
+		goto data_version_error;
+
+	while (!feof(file))
+	{
+		char   *str;
+		uint32	len;
+		bool	found;
+
+		/* First step - read the record */
+		if (fread(&disk_entry, sizeof(DSMOptimizerTrackerEntry), 1, file) != 1)
+			goto read_error;
+
+		/* Check last record */
+		if (IsEOFEntry(&disk_entry))
+		{
+			uint32 cnt;
+
+			if (fread(&cnt, sizeof(uint32), 1, file) != 1)
+				goto read_error;
+// TODO: Need soft ending
+			if (cnt != counter)
+				elog(ERROR,
+					 "[%s] Incorrect number of records read: %u instead of %u",
+					 EXTENSION_NAME, counter, cnt);
+
+			/* Correct finish of the load operation */
+			break;
+		}
+
+		/* The case of next entry */
+
+		Assert(disk_entry.key.queryId != UINT64CONST(0) &&
+			   OidIsValid(disk_entry.key.dbOid));
+
+		/* Load query string */
+		if (fread(&len, sizeof(uint32), 1, file) != 1)
+			goto read_error;
+		disk_entry.querytext_ptr = dsa_allocate0(htab_dsa, len + 1);
+		Assert(DsaPointerIsValid(disk_entry.querytext_ptr));
+		str = (char *) dsa_get_address(htab_dsa, disk_entry.querytext_ptr);
+		if (fread(str, len, 1, file) != 1)
+			goto read_error;
+
+		entry = dshash_find_or_insert(htab, &disk_entry.key, &found);
+		if (found)
+			ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("[%s] data file \"%s\" has duplicated record with dbOid %u and queryId %ld.",
+				 EXTENSION_NAME, filename, disk_entry.key.dbOid, disk_entry.key.queryId)));
+
+		entry->relative_error = disk_entry.relative_error;
+		entry->assessed_nodes = disk_entry.assessed_nodes;
+		entry->total_nodes = disk_entry.total_nodes;
+		entry->exec_time = disk_entry.exec_time;
+		entry->nexecs = disk_entry.nexecs;
+		entry->querytext_ptr = disk_entry.querytext_ptr;
+
+		dshash_release_lock(htab, entry);
+		counter++;
+	}
+
+	FreeFile(file);
+	pg_atomic_write_u32(&state->htab_counter, counter);
+	elog(LOG, "[%s] %u records loaded from file %s.",
+		 EXTENSION_NAME, counter, filename);
+	return true;
+
+read_error:
+	ereport(LOG,
+			(errcode_for_file_access(),
+			 errmsg("[%s] could not read file \"%s\": %m",
+			 EXTENSION_NAME, filename)));
+	goto fail;
+data_header_error:
+	ereport(LOG,
+			(errcode(ERRCODE_DATA_CORRUPTED),
+			 errmsg("[%s] data file \"%s\" has incompatible header version %d instead of %d.",
+			 EXTENSION_NAME, filename, header, DATA_FILE_HEADER)));
+	goto fail;
+data_version_error:
+	ereport(LOG,
+			(errcode(ERRCODE_DATA_CORRUPTED),
+			 errmsg("[%s] data file \"%s\" has incompatible postgres version %d instead of %d.",
+			 EXTENSION_NAME, filename, pgver, DATA_FORMAT_VERSION)));
+fail:
+	if (file)
+		FreeFile(file);
+
+	return false;
+}
+
+static void
+on_shmem_shutdown(int code, Datum arg)
+{
+	_flush_hash_table();
 }
