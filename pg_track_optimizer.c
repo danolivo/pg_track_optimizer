@@ -133,7 +133,6 @@ static double track_prediction_estimation(PlanState *pstate, double totaltime, S
 static void to_init_shmem(void *ptr);
 static bool _load_hash_table(TODSMRegistry *state);
 static bool _flush_hash_table(void);
-static void on_shmem_shutdown(int code, Datum arg);
 
 /*
  * Using DSM for shared memory segments we need to check attachment at each
@@ -383,8 +382,6 @@ to_init_shmem(void *ptr)
 	state->dshh = dshash_get_hash_table_handle(htab);
 	pg_atomic_init_u32(&state->htab_counter, 0);
 
-	/* Remember to flush the data on exit */
-	before_shmem_exit(on_shmem_shutdown, (Datum) 0);
 	(void) _load_hash_table(state);
 }
 
@@ -710,16 +707,10 @@ to_reset(PG_FUNCTION_ARGS)
  *
  * -------------------------------------------------------------------------- */
 
+PG_FUNCTION_INFO_V1(to_flush);
+
 static const uint32 DATA_FILE_HEADER	= 12354678;
 static const uint32 DATA_FORMAT_VERSION = 1;
-
-	double					relative_error;
-	dsa_pointer				querytext_ptr;
-	int32					assessed_nodes;
-	int32					total_nodes;
-	double					exec_time;
-	int64					nexecs; /* Number of executions have taken into account */
-
 
 static const DSMOptimizerTrackerEntry EOFEntry = {
 											.key.dbOid = 0,
@@ -739,9 +730,6 @@ static const DSMOptimizerTrackerEntry EOFEntry = {
 	(entry)->total_nodes == EOFEntry.total_nodes && \
 	(entry)->nexecs == EOFEntry.nexecs \
 )
-/*
-	(entry)->nexecs = EOFEntry.nexecs \
-*/
 
 #define EXTENSION_NAME "pg_track_optimizer"
 const char *filename = EXTENSION_NAME".stat";
@@ -761,7 +749,8 @@ _flush_hash_table(void)
 	FILE					   *file;
 	uint32						counter = 0;
 
-	track_attach_shmem();
+	if (!IsUnderPostmaster)
+		return false;
 
 	file = AllocateFile(tmpfile, PG_BINARY_W);
 	if (file == NULL)
@@ -812,12 +801,12 @@ _flush_hash_table(void)
 
 	(void) durable_rename(tmpfile, filename, LOG);
 	pfree(tmpfile);
-	elog(DEBUG2, "[%s] %u records stored in file %s.",
+	elog(LOG, "[%s] %u records stored in file %s.",
 		 EXTENSION_NAME, counter, filename);
 	return true;
 
 error:
-	ereport(LOG,
+	ereport(ERROR,
 			(errcode_for_file_access(),
 			 errmsg("could not write %s data file \"%s\": %m",
 			 EXTENSION_NAME, tmpfile)));
@@ -837,13 +826,13 @@ error:
 static bool
 _load_hash_table(TODSMRegistry *state)
 {
-	FILE   *file;
-	uint32	header;
-	int32	pgver;
-	uint32	counter = 0;
+	FILE					   *file;
+	uint32						header;
+	int32						pgver;
+	uint32						counter = 0;
 	DSMOptimizerTrackerEntry	disk_entry;
 	DSMOptimizerTrackerEntry   *entry;
-elog(WARNING, "START reading");
+
 	track_attach_shmem();
 
 	file = AllocateFile(filename, PG_BINARY_R);
@@ -880,7 +869,7 @@ elog(WARNING, "START reading");
 
 			if (fread(&cnt, sizeof(uint32), 1, file) != 1)
 				goto read_error;
-// TODO: Need soft ending
+
 			if (cnt != counter)
 				elog(ERROR,
 					 "[%s] Incorrect number of records read: %u instead of %u",
@@ -929,19 +918,19 @@ elog(WARNING, "START reading");
 	return true;
 
 read_error:
-	ereport(LOG,
+	ereport(ERROR,
 			(errcode_for_file_access(),
 			 errmsg("[%s] could not read file \"%s\": %m",
 			 EXTENSION_NAME, filename)));
 	goto fail;
 data_header_error:
-	ereport(LOG,
+	ereport(ERROR,
 			(errcode(ERRCODE_DATA_CORRUPTED),
 			 errmsg("[%s] data file \"%s\" has incompatible header version %d instead of %d.",
 			 EXTENSION_NAME, filename, header, DATA_FILE_HEADER)));
 	goto fail;
 data_version_error:
-	ereport(LOG,
+	ereport(ERROR,
 			(errcode(ERRCODE_DATA_CORRUPTED),
 			 errmsg("[%s] data file \"%s\" has incompatible postgres version %d instead of %d.",
 			 EXTENSION_NAME, filename, pgver, DATA_FORMAT_VERSION)));
@@ -952,8 +941,12 @@ fail:
 	return false;
 }
 
-static void
-on_shmem_shutdown(int code, Datum arg)
+Datum
+to_flush(PG_FUNCTION_ARGS)
 {
+	track_attach_shmem();
+
 	_flush_hash_table();
+
+	PG_RETURN_VOID();
 }
