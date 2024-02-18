@@ -42,7 +42,7 @@ PG_MODULE_MAGIC;
 	((eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0) \
 	)
 
-#define DATATBL_NCOLS	(8)
+#define DATATBL_NCOLS	(9)
 
 /*
  * Data structure used for error estimation as well as for statistics gathering.
@@ -50,6 +50,7 @@ PG_MODULE_MAGIC;
 typedef struct ScourContext
 {
 	double	error;
+	double	error2;
 	double	totaltime;
 
 	/* Number of nodes assessed */
@@ -89,6 +90,7 @@ typedef struct DSMOptimizerTrackerEntry
 	DSMOptimizerTrackerKey	key;
 
 	double					relative_error;
+	double					error2;
 	dsa_pointer				querytext_ptr;
 	int32					assessed_nodes;
 	int32					total_nodes;
@@ -277,6 +279,7 @@ store_data(QueryDesc *queryDesc, double normalized_error, ScourContext *ctx)
 	key.queryId = queryDesc->plannedstmt->queryId;
 	entry = dshash_find_or_insert(htab, &key, &found);
 	entry->relative_error = normalized_error;
+	entry->error2 = ctx->error2;
 	entry->assessed_nodes = ctx->nnodes;
 	entry->total_nodes = ctx->counter;
 	entry->exec_time = ctx->totaltime;
@@ -444,9 +447,9 @@ prediction_walker(PlanState *pstate, void *context)
 	double			plan_rows,
 					real_rows = 0;
 	ScourContext   *ctx = (ScourContext *) context;
-	double			relative_time;
 	double			nloops;
 	int				tmp_counter;
+	double			relative_time;
 
 	/* At first, increment the counter */
 	ctx->counter++;
@@ -552,10 +555,11 @@ prediction_walker(PlanState *pstate, void *context)
 	 */
 	Assert(pstate->instrument->total > 0.0);
 
-	relative_time = pstate->instrument->total /
-									pstate->instrument->nloops / ctx->totaltime;
-	ctx->error += fabs(log(real_rows / plan_rows)) * relative_time;
+	ctx->error += fabs(log(real_rows / plan_rows));
 	ctx->nnodes++;
+
+	relative_time = pstate->instrument->total / pstate->instrument->nloops / ctx->totaltime;
+	ctx->error2 += fabs(log(real_rows / plan_rows)) * relative_time;
 
 	return false;
 }
@@ -563,14 +567,15 @@ prediction_walker(PlanState *pstate, void *context)
 static double
 track_prediction_estimation(PlanState *pstate, double totaltime, ScourContext *ctx)
 {
-	ctx->error = 0;
+	ctx->error = 0.;
+	ctx->error2 = 0.;
 	ctx->totaltime = totaltime;
 	ctx->nnodes = 0;
 	ctx->counter = 0;
 
 	Assert(totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);
-	return (ctx->nnodes > 0) ? ctx->error : -1.0;
+	return (ctx->nnodes > 0) ? (ctx->error / ctx->nnodes) : -1.0;
 }
 
 /* -----------------------------------------------------------------------------
@@ -648,6 +653,7 @@ to_show_data(PG_FUNCTION_ARGS)
 		values[i++] = CStringGetTextDatum(str);
 
 		values[i++] = Float8GetDatum(entry->relative_error);
+		values[i++] = Float8GetDatum(entry->error2);
 		values[i++] = Int32GetDatum(entry->assessed_nodes);
 		values[i++] = Int32GetDatum(entry->total_nodes);
 		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
@@ -697,6 +703,9 @@ to_reset(PG_FUNCTION_ARGS)
 			elog(PANIC, "Inconsistency in the pg_track_optimizer hash table state");
 	}
 	dshash_seq_term(&stat);
+
+	/* Clean disk storage too */
+	(void) _flush_hash_table();
 
 	PG_RETURN_VOID();
 }
@@ -900,7 +909,12 @@ _load_hash_table(TODSMRegistry *state)
 				 errmsg("[%s] data file \"%s\" has duplicated record with dbOid %u and queryId %ld.",
 				 EXTENSION_NAME, filename, disk_entry.key.dbOid, disk_entry.key.queryId)));
 
+		/*
+		 * TODO: copy all data in one operation. At least we will not do
+		 * annoying copy DSM pointer.
+		 */
 		entry->relative_error = disk_entry.relative_error;
+		entry->error2 = disk_entry.error2;
 		entry->assessed_nodes = disk_entry.assessed_nodes;
 		entry->total_nodes = disk_entry.total_nodes;
 		entry->exec_time = disk_entry.exec_time;
