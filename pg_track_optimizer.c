@@ -115,7 +115,9 @@ static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 
 typedef enum
 {
+	TRACK_MODE_NORMAL,
 	TRACK_MODE_FORCED,
+	/* XXX: Do we need 'frozen' mode ? */
 	TRACK_MODE_DISABLED,
 } TrackMode;
 
