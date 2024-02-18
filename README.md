@@ -1,10 +1,21 @@
 # pg_track_optimizer
-Explore query plan and execution statistics to find signs of non-optimal optimization
+Lightweight (dynamically loaded) extension to explore query plan and execution statistics to find signs of non-optimal optimisation.
+**Designed for PostgreSQL v.17 and above.**  
 
-Occasionally, blunders in the optimizer predictions will cause a non-optimal query plan.
-So, in an extensive database with a lot of queries, it is challenging to find poorly designed plans. Honestly, so far, I don't know any tools that can help detect such problems.
+## Abstract
+Occasionally, blunders in the optimiser predictions cause a non-optimal query plan.
+In an extensive database with a lot of queries, it is challenging to find poorly designed plans. So far, I don't know any tools that can help detect such problems.
 Here, we introduce trivial criteria based on the difference between estimated and actual (after the execution) cardinalities.
 Of course, it is not proof of the problem, but we can filter candidates from a vast set of queries using this value.
-To avoid creating a brand new extension (and introducing many new errors), we just add one field into the pg_stat_statements and one mode into auto_explain to log such candidates.
+This extension can gather statistics in shared memory and show it on-demand. Also, setting error threshold you can obtain explains of queries with high value of the error in the instance log.
 
-Current patch can be applied to the current PostgreSQL master branch.
+## Interface
+### GUCs
+- *pg_track_optimizer.mode* = {normal | forced | disabled (default)}. *disabled* mode switches off all activity of the library; *normal* mode gathers statistics only when the value of log_min_error is exceeded; *forced* mode gathers data on each incoming query.
+- *pg_track_optimizer.log_min_error* - logging threshold. Criteria for pushing the query explain into the log.
+- pg_track_optimizer.hash_mem - memory limit for the hash table size. Right now doesn't include query texts - looks like very soft limit.
+
+### Routines
+- *pg_track_optimizer()* - show all data gathered.
+- *pg_track_optimizer_flush()* - save statistic data to the disk. We don't have any automatization yet to avoid overheads.
+- *pg_track_optimizer_reset()* - cleanup statistics data.
