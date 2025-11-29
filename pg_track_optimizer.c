@@ -495,9 +495,13 @@ prediction_walker(PlanState *pstate, void *context)
 		int i;
 
 		/* XXX: Copy-pasted from the get_parallel_divisor() */
-		leader_contribution = 1.0 - (0.3 * divisor);
-		if (leader_contribution > 0)
-			divisor += leader_contribution;
+		if (parallel_leader_participation)
+		{
+			leader_contribution = 1.0 - (0.3 * divisor);
+			if (leader_contribution > 0)
+				divisor += leader_contribution;
+		}
+
 		plan_rows = pstate->plan->plan_rows * divisor;
 
 		for (i = 0; i < pstate->worker_instrument->num_workers; i++)
