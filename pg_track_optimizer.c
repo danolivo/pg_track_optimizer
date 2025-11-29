@@ -18,6 +18,10 @@
 
 #include "access/parallel.h"
 #include "commands/explain.h"
+#if PG_VERSION_NUM >= 180000
+#include "commands/explain_format.h"
+#include "commands/explain_state.h"
+#endif
 #include "executor/executor.h"
 #include "funcapi.h"
 #include "lib/dshash.h"
@@ -103,6 +107,9 @@ static const dshash_parameters dsh_params = {
 	sizeof(DSMOptimizerTrackerEntry),
 	dshash_memcmp,
 	dshash_memhash,
+#if PG_VERSION_NUM >= 170000
+	dshash_memcpy,
+#endif
 	LWTRANCHE_PGSTATS_HASH
 };
 
@@ -743,7 +750,7 @@ static const DSMOptimizerTrackerEntry EOFEntry = {
 )
 
 #define EXTENSION_NAME "pg_track_optimizer"
-const char *filename = EXTENSION_NAME".stat";
+static const char *filename = EXTENSION_NAME".stat";
 
 /*
  * Specifics of the storage procedure of dshash table:
@@ -908,7 +915,7 @@ _load_hash_table(TODSMRegistry *state)
 		if (found)
 			ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg("[%s] data file \"%s\" has duplicated record with dbOid %u and queryId %ld.",
+				 errmsg("[%s] data file \"%s\" has duplicated record with dbOid %u and queryId "UINT64_FORMAT,
 				 EXTENSION_NAME, filename, disk_entry.key.dbOid, disk_entry.key.queryId)));
 
 		/*

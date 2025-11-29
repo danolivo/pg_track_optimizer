@@ -33,9 +33,9 @@ ORDER BY querytext COLLATE "C"; -- Nothing to track for plain explain.
 
 EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
 SELECT * FROM pto_test WHERE x < 1;
-                  QUERY PLAN                  
-----------------------------------------------
- Seq Scan on pto_test (actual rows=0 loops=1)
+                   QUERY PLAN                    
+-------------------------------------------------
+ Seq Scan on pto_test (actual rows=0.00 loops=1)
    Filter: (x < 1)
 (2 rows)
 
