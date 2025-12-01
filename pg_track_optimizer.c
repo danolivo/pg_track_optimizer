@@ -26,14 +26,14 @@
 #include "funcapi.h"
 #include "lib/dshash.h"
 #include "miscadmin.h"
-#include "nodes/nodeFuncs.h"
 #include "nodes/queryjumble.h"
-#include "optimizer/optimizer.h"
 #include "storage/dsm_registry.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+
+#include "plan_error.h"
 
 PG_MODULE_MAGIC;
 
@@ -47,25 +47,6 @@ PG_MODULE_MAGIC;
 	)
 
 #define DATATBL_NCOLS	(9)
-
-/*
- * Data structure used for error estimation as well as for statistics gathering.
- */
-typedef struct ScourContext
-{
-	double	error;
-	double	error2;
-	double	totaltime;
-
-	/* Number of nodes assessed */
-	int		nnodes;
-
-	/*
-	 * Total number of nodes in the plan. Originally, used to detect leaf nodes.
-	 * Now, it is a part of statistics.
-	 */
-	int 	counter;
-} ScourContext;
 
 typedef struct TODSMRegistry
 {
@@ -140,7 +121,6 @@ static int hash_mem = 4096;
 
 void _PG_init(void);
 
-static double track_prediction_estimation(PlanState *pstate, double totaltime, ScourContext *ctx);
 static void to_init_shmem(void *ptr);
 static bool _load_hash_table(TODSMRegistry *state);
 static bool _flush_hash_table(void);
@@ -264,7 +244,7 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
  * Returns false if memory limit was exceeded.
  */
 static bool
-store_data(QueryDesc *queryDesc, double normalized_error, ScourContext *ctx)
+store_data(QueryDesc *queryDesc, double normalized_error, PlanEstimatorContext *ctx)
 {
 	DSMOptimizerTrackerEntry   *entry;
 	DSMOptimizerTrackerKey		key;
@@ -288,7 +268,7 @@ store_data(QueryDesc *queryDesc, double normalized_error, ScourContext *ctx)
 	key.queryId = queryDesc->plannedstmt->queryId;
 	entry = dshash_find_or_insert(htab, &key, &found);
 	entry->relative_error = normalized_error;
-	entry->error2 = ctx->error2;
+	entry->error2 = ctx->time_weighted_error;
 	entry->assessed_nodes = ctx->nnodes;
 	entry->total_nodes = ctx->counter;
 	entry->exec_time = ctx->totaltime;
@@ -320,7 +300,7 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 {
 	MemoryContext	oldcxt;
 	double			normalized_error = -1.0;
-	ScourContext	ctx;
+	PlanEstimatorContext	ctx;
 
 	track_attach_shmem();
 
@@ -351,9 +331,9 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	 */
 	InstrEndLoop(queryDesc->totaltime);
 
-	normalized_error = track_prediction_estimation(queryDesc->planstate,
-												   queryDesc->totaltime->total,
-												   &ctx);
+	normalized_error = plan_error(queryDesc->planstate,
+							      queryDesc->totaltime->total,
+								  &ctx);
 
 	/*
 	 * Store data in the hash table and/or print it to the log. Decision on what
@@ -382,10 +362,15 @@ to_init_shmem(void *ptr)
 
 	Assert(htab_dsa == NULL && htab == NULL);
 
+#if PG_VERSION_NUM < 190000
 	LWLockInitialize(&state->lock, LWLockNewTrancheId());
-
 	tranche_id = LWLockNewTrancheId();
-	LWLockRegisterTranche(tranche_id, "pg_track_optimizer_tranche");
+	LWLockRegisterTranche(tranche_id, "pgto_dshash_tranche");
+#else
+	LWLockInitialize(&state->lock,
+					 LWLockNewTrancheId("pgto_lock_tranche"));
+	tranche_id = LWLockNewTrancheId("pgto_dshash_tranche");
+#endif
 	htab_dsa = dsa_create(tranche_id);
 	state->dsah = dsa_get_handle(htab_dsa);
 	dsa_pin(htab_dsa);
@@ -448,147 +433,6 @@ _PG_init(void)
 	ExecutorStart_hook = explain_ExecutorStart;
 	prev_ExecutorEnd = ExecutorEnd_hook;
 	ExecutorEnd_hook = track_ExecutorEnd;
-}
-
-static bool
-prediction_walker(PlanState *pstate, void *context)
-{
-	double			plan_rows,
-					real_rows = 0;
-	ScourContext   *ctx = (ScourContext *) context;
-	double			nloops;
-	int				tmp_counter;
-	double			relative_time;
-
-	/* At first, increment the counter */
-	ctx->counter++;
-
-	tmp_counter = ctx->counter;
-	planstate_tree_walker(pstate, prediction_walker, context);
-
-	/*
-	 * Finish the node before an analysis. And only after that we can touch any
-	 * instrument fields.
-	 */
-	InstrEndLoop(pstate->instrument);
-	nloops = pstate->instrument->nloops;
-
-
-	if (nloops <= 0.0 || pstate->instrument->total == 0.0)
-		/*
-		 * Skip 'never executed' case or "0-Tuple situation" and the case of
-		 * manual switching off of the timing instrumentation
-		 */
-		return false;
-
-	/*
-	 * Calculate number of rows predicted by the optimizer and really passed
-	 * through the node. This simplistic code becomes a bit tricky in the case
-	 * of parallel workers.
-	 */
-	if (pstate->worker_instrument)
-	{
-		double	wnloops = 0.;
-		double	wntuples = 0.;
-		double	divisor = pstate->worker_instrument->num_workers;
-		double	leader_contribution;
-		int i;
-
-		/* XXX: Copy-pasted from the get_parallel_divisor() */
-		if (parallel_leader_participation)
-		{
-			leader_contribution = 1.0 - (0.3 * divisor);
-			if (leader_contribution > 0)
-				divisor += leader_contribution;
-		}
-
-		plan_rows = pstate->plan->plan_rows * divisor;
-
-		for (i = 0; i < pstate->worker_instrument->num_workers; i++)
-		{
-			double t = pstate->worker_instrument->instrument[i].ntuples;
-			double l = pstate->worker_instrument->instrument[i].nloops;
-
-			if (l <= 0.0)
-			{
-				/*
-				 * Worker could start but not to process any tuples just because
-				 * of laziness. Skip such a node.
-				 */
-				continue;
-			}
-
-			wntuples += t;
-
-			/* In leaf nodes we should get into account filtered tuples */
-			if (tmp_counter == ctx->counter)
-				wntuples += pstate->worker_instrument->instrument[i].nfiltered1 +
-							pstate->worker_instrument->instrument[i].nfiltered2 +
-							pstate->instrument->ntuples2;
-
-			wnloops += l;
-			real_rows += t/l;
-		}
-
-		Assert(nloops >= wnloops);
-
-		/* Calculate the part of job have made by the main process */
-		if (nloops - wnloops > 0.0)
-		{
-			double	ntuples = pstate->instrument->ntuples;
-
-			/* In leaf nodes we should get into account filtered tuples */
-			if (tmp_counter == ctx->counter)
-				ntuples += (pstate->instrument->nfiltered1 +
-												pstate->instrument->nfiltered2 +
-												pstate->instrument->ntuples2);
-
-			Assert(ntuples >= wntuples);
-			real_rows += (ntuples - wntuples) / (nloops - wnloops);
-		}
-	}
-	else
-	{
-		plan_rows = pstate->plan->plan_rows;
-		real_rows = pstate->instrument->ntuples / nloops;
-
-		/* In leaf nodes we should get into account filtered tuples */
-		if (tmp_counter == ctx->counter)
-			real_rows += (pstate->instrument->nfiltered1 +
-									pstate->instrument->nfiltered2 +
-									pstate->instrument->ntuples2) / nloops;
-	}
-
-	plan_rows = clamp_row_est(plan_rows);
-	real_rows = clamp_row_est(real_rows);
-
-	/*
-	 * Now, we can calculate a value of the estimation relative error has made
-	 * by the optimizer.
-	 */
-	Assert(pstate->instrument->total > 0.0);
-
-	ctx->error += fabs(log(real_rows / plan_rows));
-	ctx->nnodes++;
-
-	relative_time = pstate->instrument->total / pstate->instrument->nloops / ctx->totaltime;
-	ctx->error2 += fabs(log(real_rows / plan_rows)) * relative_time;
-
-	return false;
-}
-
-static double
-track_prediction_estimation(PlanState *pstate, double totaltime, ScourContext *ctx)
-{
-	ctx->error = 0.;
-	ctx->error2 = 0.;
-	ctx->totaltime = totaltime;
-	ctx->nnodes = 0;
-	ctx->counter = 0;
-
-	Assert(totaltime > 0.);
-	(void) prediction_walker(pstate, (void *) ctx);
-	return (ctx->nnodes > 0) ? (ctx->error / ctx->nnodes) : -1.0;
 }
 
 /* -----------------------------------------------------------------------------
