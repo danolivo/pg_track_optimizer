@@ -38,6 +38,9 @@ prediction_walker(PlanState *pstate, void *context)
 	 * Finish the node before an analysis. And only after that we can touch any
 	 * instrument fields.
 	 */
+	if (!pstate->instrument)
+		return false;
+
 	InstrEndLoop(pstate->instrument);
 	nloops = pstate->instrument->nloops;
 
@@ -56,8 +59,8 @@ prediction_walker(PlanState *pstate, void *context)
 	 */
 	if (pstate->worker_instrument)
 	{
-		double	wnloops = 0.;
-		double	wntuples = 0.;
+		double	total_tuples = 0.;
+		double	total_loops = 0.;
 		double	divisor = pstate->worker_instrument->num_workers;
 		double	leader_contribution;
 		int i;
@@ -72,6 +75,7 @@ prediction_walker(PlanState *pstate, void *context)
 
 		plan_rows = pstate->plan->plan_rows * divisor;
 
+		/* Accumulate tuples from all workers */
 		for (i = 0; i < pstate->worker_instrument->num_workers; i++)
 		{
 			double t = pstate->worker_instrument->instrument[i].ntuples;
@@ -86,34 +90,36 @@ prediction_walker(PlanState *pstate, void *context)
 				continue;
 			}
 
-			wntuples += t;
-
 			/* In leaf nodes we should get into account filtered tuples */
 			if (tmp_counter == ctx->counter)
-				wntuples += pstate->worker_instrument->instrument[i].nfiltered1 +
-							pstate->worker_instrument->instrument[i].nfiltered2 +
-							pstate->instrument->ntuples2;
+				t += pstate->worker_instrument->instrument[i].nfiltered1 +
+					 pstate->worker_instrument->instrument[i].nfiltered2 +
+					 pstate->worker_instrument->instrument[i].ntuples2;
 
-			wnloops += l;
-			real_rows += t/l;
+			total_tuples += t;
+			total_loops += l;
 		}
 
-		Assert(nloops >= wnloops);
-
-		/* Calculate the part of job have made by the main process */
-		if (nloops - wnloops > 0.0)
+		/* Add the leader's contribution */
+		if (nloops > 0.0)
 		{
-			double	ntuples = pstate->instrument->ntuples;
+			double	leader_tuples = pstate->instrument->ntuples;
 
 			/* In leaf nodes we should get into account filtered tuples */
 			if (tmp_counter == ctx->counter)
-				ntuples += (pstate->instrument->nfiltered1 +
-												pstate->instrument->nfiltered2 +
-												pstate->instrument->ntuples2);
+				leader_tuples += pstate->instrument->nfiltered1 +
+								 pstate->instrument->nfiltered2 +
+								 pstate->instrument->ntuples2;
 
-			Assert(ntuples >= wntuples);
-			real_rows += (ntuples - wntuples) / (nloops - wnloops);
+			total_tuples += leader_tuples;
+			total_loops += nloops;
 		}
+
+		/* Calculate average rows per loop across all workers and leader */
+		if (total_loops > 0.0)
+			real_rows = total_tuples / total_loops;
+		else
+			real_rows = 0.0;
 	}
 	else
 	{
