@@ -110,6 +110,7 @@ typedef enum
 } TrackMode;
 
 static const struct config_enum_entry format_options[] = {
+	{"normal", TRACK_MODE_NORMAL, false},
 	{"forced", TRACK_MODE_FORCED, false},
 	{"disabled", TRACK_MODE_DISABLED, false},
 	{NULL, 0, false}
@@ -259,7 +260,7 @@ store_data(QueryDesc *queryDesc, double normalized_error, PlanEstimatorContext *
 	counter = pg_atomic_read_u32(&shared->htab_counter);
 
 	if (counter == UINT32_MAX ||
-		counter * sizeof(DSMOptimizerTrackerEntry) > hash_mem)
+		counter > (uint32)(hash_mem / sizeof(DSMOptimizerTrackerEntry)))
 		/* TODO: set status of full hash table */
 		return false;
 
@@ -282,7 +283,7 @@ store_data(QueryDesc *queryDesc, double normalized_error, PlanEstimatorContext *
 		entry->querytext_ptr = dsa_allocate0(htab_dsa, len + 1);
 		Assert(DsaPointerIsValid(entry->querytext_ptr));
 		strptr = (char *) dsa_get_address(htab_dsa, entry->querytext_ptr);
-		strlcpy(strptr, queryDesc->sourceText, len);
+		strlcpy(strptr, queryDesc->sourceText, len + 1);
 
 		entry->nexecs = 0;
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
@@ -535,8 +536,10 @@ to_reset(PG_FUNCTION_ARGS)
 
 	track_attach_shmem();
 
+	LWLockAcquire(&shared->lock, LW_EXCLUSIVE);
+
 	/*
-	 * Destroying shared ahsh table is a bit dangerous procedure. Without full
+	 * Destroying shared hash table is a bit dangerous procedure. Without full
 	 * understanding of the dshash_destroy() technique, delete elements more
 	 * simply, one by one.
 	 */
@@ -549,20 +552,25 @@ to_reset(PG_FUNCTION_ARGS)
 			   OidIsValid(entry->key.dbOid));
 
 		/* At first, free memory, allocated for the query text */
-		DsaPointerIsValid(entry->querytext_ptr);
+		Assert(DsaPointerIsValid(entry->querytext_ptr));
 		dsa_free(htab_dsa, entry->querytext_ptr);
 
 		dshash_delete_current(&stat);
 		pre = pg_atomic_fetch_sub_u32(&shared->htab_counter, 1);
 
-		if (pre <= 0)
+		if (pre == 0)
+		{
 			/* Trigger a reboot to cleanup the state. No another solution I see */
-			elog(PANIC, "Inconsistency in the pg_track_optimizer hash table state");
+			LWLockRelease(&shared->lock);
+			elog(ERROR, "Inconsistency in the pg_track_optimizer hash table state");
+		}
 	}
 	dshash_seq_term(&stat);
 
 	/* Clean disk storage too */
 	(void) _flush_hash_table();
+
+	LWLockRelease(&shared->lock);
 
 	PG_RETURN_VOID();
 }

@@ -1,6 +1,6 @@
 
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
-\echo Use "CREATE EXTENSION pg_stat_optimizer" to load this file. \quit
+\echo Use "CREATE EXTENSION pg_track_optimizer" to load this file. \quit
 
 CREATE OR REPLACE FUNCTION pg_track_optimizer(
 	OUT dboid			Oid,
