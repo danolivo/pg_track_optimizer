@@ -45,7 +45,6 @@ prediction_walker(PlanState *pstate, void *context)
 	InstrEndLoop(pstate->instrument);
 	nloops = pstate->instrument->nloops;
 
-
 	if (nloops <= 0.0 || pstate->instrument->total == 0.0)
 		/*
 		 * Skip 'never executed' case or "0-Tuple situation" and the case of
@@ -96,7 +95,12 @@ prediction_walker(PlanState *pstate, void *context)
 			if (tmp_counter == ctx->counter)
 				wntuples += pstate->worker_instrument->instrument[i].nfiltered1 +
 							pstate->worker_instrument->instrument[i].nfiltered2 +
-							pstate->instrument->ntuples2;
+							/*
+							 * Right now only IndexOnlyScan uses this field. So,
+							 * no errors in parallel case possible, but who
+							 * knows?
+							 */
+							pstate->worker_instrument->instrument[i].ntuples2;
 
 			wnloops += l;
 			real_rows += t/l;
