@@ -103,14 +103,12 @@ static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 
 typedef enum
 {
-	TRACK_MODE_NORMAL,
 	TRACK_MODE_FORCED,
 	/* XXX: Do we need 'frozen' mode ? */
 	TRACK_MODE_DISABLED,
 } TrackMode;
 
 static const struct config_enum_entry format_options[] = {
-	{"normal", TRACK_MODE_NORMAL, false},
 	{"forced", TRACK_MODE_FORCED, false},
 	{"disabled", TRACK_MODE_DISABLED, false},
 	{NULL, 0, false}
@@ -558,11 +556,10 @@ to_reset(PG_FUNCTION_ARGS)
 		dshash_delete_current(&stat);
 		pre = pg_atomic_fetch_sub_u32(&shared->htab_counter, 1);
 
-		if (pre == 0)
+		if (pre <= 0)
 		{
 			/* Trigger a reboot to cleanup the state. No another solution I see */
-			LWLockRelease(&shared->lock);
-			elog(ERROR, "Inconsistency in the pg_track_optimizer hash table state");
+			elog(PANIC, "Inconsistency in the pg_track_optimizer hash table state");
 		}
 	}
 	dshash_seq_term(&stat);
