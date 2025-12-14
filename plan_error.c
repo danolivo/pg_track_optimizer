@@ -34,10 +34,14 @@ prediction_walker(PlanState *pstate, void *context)
 	tmp_counter = ctx->counter;
 	planstate_tree_walker(pstate, prediction_walker, context);
 
+	if (!pstate->instrument)
+		return false;
+
 	/*
 	 * Finish the node before an analysis. And only after that we can touch any
 	 * instrument fields.
 	 */
+
 	InstrEndLoop(pstate->instrument);
 	nloops = pstate->instrument->nloops;
 
