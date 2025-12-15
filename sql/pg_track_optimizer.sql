@@ -27,4 +27,27 @@ SELECT querytext,relative_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs
 FROM pg_track_optimizer()
 ORDER BY querytext;
 
+/*
+ * Tests for parallel workers.
+ */
+
+SET max_parallel_workers_per_gather = 4;
+SET parallel_setup_cost = 0.0001;
+SET parallel_tuple_cost = 0.0000001;
+SET min_parallel_table_scan_size = 0;
+
+CREATE TABLE t1 (x numeric) WITH (parallel_workers = 4);
+INSERT INTO t1 (x) SELECT random() FROM generate_series(1, 100000);
+VACUUM t1;
+
+SET pg_track_optimizer.mode = 'forced';
+
+-- Error must be zero in this case.
+-- XXX: Is there a case when number of parallel workers will be less than 4?
+EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)
+SELECT * FROM t1;
+
+SELECT querytext,relative_error,error2,nodes_assessed,nodes_total,nexecs
+FROM pg_track_optimizer() WHERE querytext LIKE '%FROM t1%';
+
 DROP EXTENSION pg_track_optimizer;
