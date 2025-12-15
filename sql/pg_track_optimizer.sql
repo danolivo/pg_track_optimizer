@@ -50,4 +50,37 @@ SELECT * FROM t1;
 SELECT querytext,relative_error,error2,nodes_assessed,nodes_total,nexecs
 FROM pg_track_optimizer() WHERE querytext LIKE '%FROM t1%';
 
+/*
+ * IndexOnlyScan may fetch dead tuples and recheck their state in the heap.
+ * That means we touch the disk and need to take into account this fact.
+ * Check it here.
+ */
+CREATE TABLE verify_test (
+    id SERIAL PRIMARY KEY,
+    val INTEGER
+) WITH (autovacuum_enabled = 'off');
+CREATE INDEX idx_verify ON verify_test (val);
+
+INSERT INTO verify_test (val)
+  SELECT i FROM generate_series(1, 100000) i;
+VACUUM ANALYZE verify_test;
+
+-- Dirty some pages
+UPDATE verify_test SET val = val + 1 WHERE id % 10 = 0;
+
+SET min_parallel_index_scan_size = 0;
+SET enable_seqscan = off;
+
+-- Check if we get parallel index-only scan WITH heap fetches
+EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)
+SELECT val FROM verify_test;
+
+-- XXX: if we ever implement per-node error printing it would allow to
+-- demonstrate how the error grows and show reasoning for the final value in
+-- a more understandable manner.
+-- So, make this test helpful in the future ...
+SELECT
+  querytext,nodes_assessed,nodes_total,nexecs
+FROM pg_track_optimizer() WHERE querytext LIKE '%FROM verify_test%';
+
 DROP EXTENSION pg_track_optimizer;

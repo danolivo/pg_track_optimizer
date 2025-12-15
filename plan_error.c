@@ -114,12 +114,6 @@ prediction_walker(PlanState *pstate, void *context)
 			wntuples += instr->ntuples;
 
 			/*
-			 * Right now only IndexOnlyScan uses this field. So, it should be
-			 * zero with parallel workers, but who knows?
-			 */
-			Assert(instr->ntuples2 <= 0.);
-
-			/*
 			 * In leaf nodes we should get into account filtered tuples
 			 *
 			 * XXX:
