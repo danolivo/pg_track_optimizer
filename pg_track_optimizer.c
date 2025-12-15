@@ -101,14 +101,26 @@ static dshash_table *htab = NULL;
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 
+/*
+ * The module's work modes:
+ * - NORMAL - track the query if the log_min_error threshold is exceeded
+ * - FORCED - track each query
+ * - DISABLED - do not track any queries
+ *
+ * XXX: What about DML commands? It seems they use nfilteredX/ntuples2
+ * instrumentation fields in a way we don't count here. Is it a subject for
+ * correction our method?
+ */
 typedef enum
 {
+	TRACK_MODE_NORMAL,
 	TRACK_MODE_FORCED,
 	/* XXX: Do we need 'frozen' mode ? */
 	TRACK_MODE_DISABLED,
 } TrackMode;
 
 static const struct config_enum_entry format_options[] = {
+	{"normal", TRACK_MODE_NORMAL, false},
 	{"forced", TRACK_MODE_FORCED, false},
 	{"disabled", TRACK_MODE_DISABLED, false},
 	{NULL, 0, false}
