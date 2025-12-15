@@ -56,6 +56,14 @@ prediction_walker(PlanState *pstate, void *context)
 	 * Calculate number of rows predicted by the optimizer and really passed
 	 * through the node. This simplistic code becomes a bit tricky in the case
 	 * of parallel workers.
+	 *
+	 * Clarification: we take into account tuples that the nodes has filtered.
+	 * Although EXPLAINed nrows shows number of tuples 'produced', we follow
+	 * this logic  because any tuple that came to the node needs some efforts
+	 * and resources to be processed. So, according to the idea of detection
+	 * potential non-optimal decisions filtered tuples should add into the error
+	 * estimation too: we have an evidence on frequent IndexScan non-optimality
+	 * because fetched but filtered tuples strike queries' performance.
 	 */
 	if (pstate->worker_instrument)
 	{
@@ -195,5 +203,16 @@ plan_error(PlanState *pstate, double totaltime, PlanEstimatorContext *ctx)
 
 	Assert(totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);
-	return (ctx->nnodes > 0) ? (ctx->error / ctx->nnodes) : -1.0;
+
+	/* Finally, average on the number of nodes */
+	if (ctx->nnodes > 0)
+	{
+		ctx->error /= ctx->nnodes;
+		ctx->time_weighted_error /= ctx->nnodes;
+	}
+	else
+		/* No nodes considered - no estimation can be made. */
+		ctx->error = ctx->time_weighted_error = -1.;
+
+	return ctx->error;
 }
