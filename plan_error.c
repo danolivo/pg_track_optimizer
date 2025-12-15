@@ -65,6 +65,8 @@ prediction_walker(PlanState *pstate, void *context)
 		double	leader_contribution;
 		int i;
 
+		Assert(pstate->worker_instrument->instrument != NULL);
+
 		/* XXX: Copy-pasted from the get_parallel_divisor() */
 		if (parallel_leader_participation)
 		{
@@ -77,33 +79,47 @@ prediction_walker(PlanState *pstate, void *context)
 
 		for (i = 0; i < pstate->worker_instrument->num_workers; i++)
 		{
-			double t = pstate->worker_instrument->instrument[i].ntuples;
-			double l = pstate->worker_instrument->instrument[i].nloops;
+			Instrumentation *instr = &pstate->worker_instrument->instrument[i];
 
-			if (l <= 0.0)
+			if (instr->nloops <= 0.0)
 			{
 				/*
 				 * Worker could start but not to process any tuples just because
 				 * of laziness. Skip such a node.
 				 */
+
+				/*
+				 * In development, check that we live in the space of correct
+				 * assumptions
+				 */
+				Assert(instr->ntuples <= 0.);
+
 				continue;
 			}
 
-			wntuples += t;
+			wntuples += instr->ntuples;
 
-			/* In leaf nodes we should get into account filtered tuples */
+			/*
+			 * Right now only IndexOnlyScan uses this field. So, it should be
+			 * zero with parallel workers, but who knows?
+			 */
+			Assert(instr->ntuples2 <= 0.);
+
+			/*
+			 * In leaf nodes we should get into account filtered tuples
+			 *
+			 * XXX:
+			 * It seems that nfiltered1 counts the number of tuples filtered by
+			 * a joinqual clause. The nfiltered2 counts the number of tuples,
+			 * removed by an 'other' clause. So, should we consider them not
+			 * only in leaf nodes?
+			 */
 			if (tmp_counter == ctx->counter)
-				wntuples += pstate->worker_instrument->instrument[i].nfiltered1 +
-							pstate->worker_instrument->instrument[i].nfiltered2 +
-							/*
-							 * Right now only IndexOnlyScan uses this field. So,
-							 * no errors in parallel case possible, but who
-							 * knows?
-							 */
-							pstate->worker_instrument->instrument[i].ntuples2;
+				wntuples += instr->nfiltered1 + instr->nfiltered2 +
+																instr->ntuples2;
 
-			wnloops += l;
-			real_rows += t/l;
+			wnloops += instr->nloops;
+			real_rows += instr->ntuples / instr->nloops;
 		}
 
 		Assert(nloops >= wnloops);
