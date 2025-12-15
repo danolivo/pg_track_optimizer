@@ -1,0 +1,31 @@
+CREATE EXTENSION pg_track_optimizer;
+\d pg_track_optimizer
+                  View "public.pg_track_optimizer"
+     Column      |       Type       | Collation | Nullable | Default 
+-----------------+------------------+-----------+----------+---------
+ dboid           | oid              |           |          | 
+ queryid         | bigint           |           |          | 
+ querytext       | text             |           |          | 
+ relative_error  | double precision |           |          | 
+ quadratic_error | double precision |           |          | 
+ error2          | double precision |           |          | 
+ nodes_assessed  | integer          |           |          | 
+ nodes_total     | integer          |           |          | 
+ exec_time       | double precision |           |          | 
+ nexecs          | bigint           |           |          | 
+
+\df pg_track_optimizer_flush
+                                 List of functions
+ Schema |           Name           | Result data type | Argument data types | Type 
+--------+--------------------------+------------------+---------------------+------
+ public | pg_track_optimizer_flush | void             |                     | func
+(1 row)
+
+\df pg_track_optimizer_reset
+                                 List of functions
+ Schema |           Name           | Result data type | Argument data types | Type 
+--------+--------------------------+------------------+---------------------+------
+ public | pg_track_optimizer_reset | void             |                     | func
+(1 row)
+
+DROP EXTENSION pg_track_optimizer;

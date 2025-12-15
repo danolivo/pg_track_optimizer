@@ -27,6 +27,7 @@ prediction_walker(PlanState *pstate, void *context)
 	double					nloops;
 	int						tmp_counter;
 	double					relative_time;
+	double					node_error;
 
 	/* At first, increment the counter */
 	ctx->counter++;
@@ -176,11 +177,13 @@ prediction_walker(PlanState *pstate, void *context)
 	 */
 	Assert(pstate->instrument->total > 0.0);
 
-	ctx->error += fabs(log(real_rows / plan_rows));
+	node_error = fabs(log(real_rows / plan_rows));
+	ctx->error += node_error;
+	ctx->quadratic_error += node_error * node_error;
+	relative_time = pstate->instrument->total /
+									pstate->instrument->nloops / ctx->totaltime;
+	ctx->time_weighted_error += node_error * relative_time;
 	ctx->nnodes++;
-
-	relative_time = pstate->instrument->total / pstate->instrument->nloops / ctx->totaltime;
-	ctx->time_weighted_error += fabs(log(real_rows / plan_rows)) * relative_time;
 
 	return false;
 }
@@ -196,6 +199,7 @@ double
 plan_error(PlanState *pstate, double totaltime, PlanEstimatorContext *ctx)
 {
 	ctx->error = 0.;
+	ctx->quadratic_error = 0.;
 	ctx->time_weighted_error = 0.;
 	ctx->totaltime = totaltime;
 	ctx->nnodes = 0;
@@ -208,11 +212,12 @@ plan_error(PlanState *pstate, double totaltime, PlanEstimatorContext *ctx)
 	if (ctx->nnodes > 0)
 	{
 		ctx->error /= ctx->nnodes;
+		ctx->quadratic_error = sqrt(ctx->quadratic_error / ctx->nnodes);
 		ctx->time_weighted_error /= ctx->nnodes;
 	}
 	else
 		/* No nodes considered - no estimation can be made. */
-		ctx->error = ctx->time_weighted_error = -1.;
+		ctx->error = ctx->quadratic_error = ctx->time_weighted_error = -1.;
 
 	return ctx->error;
 }

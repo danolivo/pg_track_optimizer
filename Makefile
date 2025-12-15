@@ -11,7 +11,7 @@ EXTVERSION = 0.1
 
 DATA = pg_track_optimizer--0.1.sql
 
-REGRESS = pg_track_optimizer
+REGRESS = pg_track_optimizer interface
 EXTRA_REGRESS_OPTS=--temp-config=$(top_srcdir)/$(subdir)/pg_track_optimizer.conf
 
 ifdef USE_PGXS

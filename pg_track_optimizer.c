@@ -46,7 +46,7 @@ PG_MODULE_MAGIC;
 	((eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0) \
 	)
 
-#define DATATBL_NCOLS	(9)
+#define DATATBL_NCOLS	(10)
 
 typedef struct TODSMRegistry
 {
@@ -75,6 +75,7 @@ typedef struct DSMOptimizerTrackerEntry
 	DSMOptimizerTrackerKey	key;
 
 	double					relative_error;
+	double					quadratic_error;
 	double					error2;
 	dsa_pointer				querytext_ptr;
 	int32					assessed_nodes;
@@ -255,7 +256,7 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
  * Returns false if memory limit was exceeded.
  */
 static bool
-store_data(QueryDesc *queryDesc, double normalized_error, PlanEstimatorContext *ctx)
+store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 {
 	DSMOptimizerTrackerEntry   *entry;
 	DSMOptimizerTrackerKey		key;
@@ -264,7 +265,7 @@ store_data(QueryDesc *queryDesc, double normalized_error, PlanEstimatorContext *
 
 	Assert(htab != NULL && queryDesc->plannedstmt->queryId != UINT64CONST(0));
 
-	if (!(normalized_error >= log_min_error || track_mode == TRACK_MODE_FORCED))
+	if (!(ctx->error >= log_min_error || track_mode == TRACK_MODE_FORCED))
 		return false;
 
 	counter = pg_atomic_read_u32(&shared->htab_counter);
@@ -278,7 +279,8 @@ store_data(QueryDesc *queryDesc, double normalized_error, PlanEstimatorContext *
 	key.dbOid = MyDatabaseId;
 	key.queryId = queryDesc->plannedstmt->queryId;
 	entry = dshash_find_or_insert(htab, &key, &found);
-	entry->relative_error = normalized_error;
+	entry->relative_error = ctx->error;
+	entry->quadratic_error = ctx->quadratic_error;
 	entry->error2 = ctx->time_weighted_error;
 	entry->assessed_nodes = ctx->nnodes;
 	entry->total_nodes = ctx->counter;
@@ -350,7 +352,7 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	 * Store data in the hash table and/or print it to the log. Decision on what
 	 * to do each routine makes individually.
 	 */
-	store_data(queryDesc, normalized_error, &ctx);
+	store_data(queryDesc, &ctx);
 	_explain_statement(queryDesc, normalized_error);
 
 	MemoryContextSwitchTo(oldcxt);
@@ -521,6 +523,7 @@ to_show_data(PG_FUNCTION_ARGS)
 		values[i++] = CStringGetTextDatum(str);
 
 		values[i++] = Float8GetDatum(entry->relative_error);
+		values[i++] = Float8GetDatum(entry->quadratic_error);
 		values[i++] = Float8GetDatum(entry->error2);
 		values[i++] = Int32GetDatum(entry->assessed_nodes);
 		values[i++] = Int32GetDatum(entry->total_nodes);
@@ -599,6 +602,8 @@ static const DSMOptimizerTrackerEntry EOFEntry = {
 											.key.dbOid = 0,
 											.key.queryId = 0,
 											.relative_error = -2.,
+											.quadratic_error = -2.,
+											.error2 = -2.,
 											.querytext_ptr = 0,
 											.assessed_nodes = -1,
 											.total_nodes = -1,
@@ -788,6 +793,7 @@ _load_hash_table(TODSMRegistry *state)
 		 * annoying copy DSM pointer.
 		 */
 		entry->relative_error = disk_entry.relative_error;
+		entry->quadratic_error = disk_entry.quadratic_error;
 		entry->error2 = disk_entry.error2;
 		entry->assessed_nodes = disk_entry.assessed_nodes;
 		entry->total_nodes = disk_entry.total_nodes;

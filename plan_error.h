@@ -21,6 +21,7 @@ typedef struct PlanEstimatorContext
 
 	/* Different types of planning error may be placed here */
 	double	error;
+	double	quadratic_error;
 	double	time_weighted_error;
 } PlanEstimatorContext;
 
