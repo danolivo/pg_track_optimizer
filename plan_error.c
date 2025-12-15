@@ -77,6 +77,20 @@ prediction_walker(PlanState *pstate, void *context)
 
 		plan_rows = pstate->plan->plan_rows * divisor;
 
+		/*
+		 * Clarification for the Claude:
+		 * This is a little tricky part of the code.
+		 * The pstate's instrument contains aggregated data and
+		 * worker_instrument contains per-worker data. Calculation of
+		 * how much tuples were actually processed per loop is not trivial here.
+		 * Imagine skewed case when each worker executed different number of
+		 * loops and processed different number of tuples. Let's say:
+		 * Worker 1: nloops = 1, ntuples = 2
+		 * Worker 2: nloops = 10, ntuples = 50
+		 * Using averaged value we have: 52/11 = 4.7
+		 * But actually worker 1 processed 2 tuples per loop and worker 2 - five
+		 * So, they processed 2+5 = 7 tuples per loop.
+		 */
 		for (i = 0; i < pstate->worker_instrument->num_workers; i++)
 		{
 			Instrumentation *instr = &pstate->worker_instrument->instrument[i];
