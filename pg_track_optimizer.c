@@ -133,9 +133,43 @@ static int hash_mem = 4096;
 
 void _PG_init(void);
 
-static void to_init_shmem(void *ptr);
 static bool _load_hash_table(TODSMRegistry *state);
 static bool _flush_hash_table(void);
+
+/*
+ * First-time initialization code. Secured by the lock on DSM registry.
+ */
+static void
+#if PG_VERSION_NUM < 190000
+to_init_shmem(void *ptr)
+#else
+to_init_shmem(void *ptr, void *arg)
+#endif
+{
+	TODSMRegistry	   *state = (TODSMRegistry *) ptr;
+	int					tranche_id; /* dshash tranche */
+
+	Assert(htab_dsa == NULL && htab == NULL);
+
+#if PG_VERSION_NUM < 190000
+	LWLockInitialize(&state->lock, LWLockNewTrancheId());
+	tranche_id = LWLockNewTrancheId();
+	LWLockRegisterTranche(tranche_id, "pgto_dshash_tranche");
+#else
+	LWLockInitialize(&state->lock,
+					 LWLockNewTrancheId("pgto_lock_tranche"));
+	tranche_id = LWLockNewTrancheId("pgto_dshash_tranche");
+#endif
+	htab_dsa = dsa_create(tranche_id);
+	state->dsah = dsa_get_handle(htab_dsa);
+	dsa_pin(htab_dsa);
+
+	htab = dshash_create(htab_dsa, &dsh_params, 0);
+	state->dshh = dshash_get_hash_table_handle(htab);
+	pg_atomic_init_u32(&state->htab_counter, 0);
+
+	(void) _load_hash_table(state);
+}
 
 /*
  * Using DSM for shared memory segments we need to check attachment at each
@@ -152,10 +186,17 @@ track_attach_shmem(void)
 
 	mctx = MemoryContextSwitchTo(TopMemoryContext);
 
+#if PG_VERSION_NUM < 190000
 	shared = GetNamedDSMSegment("pg_track_optimizer",
 								   sizeof(TODSMRegistry),
 								   to_init_shmem,
 								   &found);
+#else
+	shared = GetNamedDSMSegment("pg_track_optimizer",
+								   sizeof(TODSMRegistry),
+								   to_init_shmem,
+								   &found, NULL);
+#endif
 
 	if (found)
 	{
@@ -362,37 +403,6 @@ end:
 		prev_ExecutorEnd(queryDesc);
 	else
 		standard_ExecutorEnd(queryDesc);
-}
-
-/*
- * First-time initialization code. Secured by the lock on DSM registry.
- */
-static void
-to_init_shmem(void *ptr)
-{
-	TODSMRegistry	   *state = (TODSMRegistry *) ptr;
-	int					tranche_id; /* dshash tranche */
-
-	Assert(htab_dsa == NULL && htab == NULL);
-
-#if PG_VERSION_NUM < 190000
-	LWLockInitialize(&state->lock, LWLockNewTrancheId());
-	tranche_id = LWLockNewTrancheId();
-	LWLockRegisterTranche(tranche_id, "pgto_dshash_tranche");
-#else
-	LWLockInitialize(&state->lock,
-					 LWLockNewTrancheId("pgto_lock_tranche"));
-	tranche_id = LWLockNewTrancheId("pgto_dshash_tranche");
-#endif
-	htab_dsa = dsa_create(tranche_id);
-	state->dsah = dsa_get_handle(htab_dsa);
-	dsa_pin(htab_dsa);
-
-	htab = dshash_create(htab_dsa, &dsh_params, 0);
-	state->dshh = dshash_get_hash_table_handle(htab);
-	pg_atomic_init_u32(&state->htab_counter, 0);
-
-	(void) _load_hash_table(state);
 }
 
 void
