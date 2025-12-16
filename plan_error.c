@@ -120,8 +120,6 @@ prediction_walker(PlanState *pstate, void *context)
 				continue;
 			}
 
-			wntuples += instr->ntuples;
-
 			/*
 			 * In leaf nodes we should get into account filtered tuples
 			 *
@@ -135,6 +133,7 @@ prediction_walker(PlanState *pstate, void *context)
 				wntuples += instr->nfiltered1 + instr->nfiltered2 +
 																instr->ntuples2;
 
+			wntuples += instr->ntuples;
 			wnloops += instr->nloops;
 			real_rows += instr->ntuples / instr->nloops;
 		}
