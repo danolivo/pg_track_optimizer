@@ -1,0 +1,138 @@
+name: PostgreSQL Extension Installcheck
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  installcheck:
+    name: PG ${{ matrix.pg_version }} installcheck
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        pg_version: [17, 18, master]
+
+    steps:
+    - name: Checkout extension code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libreadline-dev \
+          zlib1g-dev \
+          flex \
+          bison \
+          libxml2-dev \
+          libxslt-dev \
+          libssl-dev \
+          libxml2-utils \
+          xsltproc \
+          ccache
+
+    - name: Cache PostgreSQL build
+      uses: actions/cache@v4
+      id: pg-cache
+      with:
+        path: ~/postgresql
+        key: ${{ runner.os }}-pg-${{ matrix.pg_version }}-installcheck-${{ hashFiles('.github/workflows/installcheck.yml') }}
+
+    - name: Clone PostgreSQL
+      if: steps.pg-cache.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        if [ "${{ matrix.pg_version }}" = "master" ]; then
+          git clone --depth 1 --branch master https://github.com/postgres/postgres.git postgresql
+        else
+          git clone --depth 1 --branch REL_${{ matrix.pg_version }}_STABLE https://github.com/postgres/postgres.git postgresql
+        fi
+
+    - name: Build PostgreSQL
+      if: steps.pg-cache.outputs.cache-hit != 'true'
+      run: |
+        cd ~/postgresql
+        ./configure --prefix=$HOME/postgresql/inst --enable-debug --enable-cassert --enable-depend
+        make -j$(nproc)
+        make install
+
+    - name: Add PostgreSQL to PATH
+      run: |
+        echo "$HOME/postgresql/inst/bin" >> $GITHUB_PATH
+        echo "PG_CONFIG=$HOME/postgresql/inst/bin/pg_config" >> $GITHUB_ENV
+
+    - name: Build and install extension
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        make USE_PGXS=1 clean
+        make USE_PGXS=1
+        make USE_PGXS=1 install
+
+    - name: Initialize PostgreSQL cluster
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        initdb -D $HOME/pgdata
+
+    - name: Configure PostgreSQL with pg_track_optimizer
+      run: |
+        cat >> $HOME/pgdata/postgresql.conf <<EOF
+        shared_preload_libraries = 'pg_track_optimizer'
+        pg_track_optimizer.mode = 'forced'
+        EOF
+
+    - name: Start PostgreSQL
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        pg_ctl -D $HOME/pgdata -l $HOME/pgdata/logfile start
+        # Wait for PostgreSQL to start
+        for i in {1..30}; do
+          if pg_isready -h localhost; then
+            break
+          fi
+          sleep 1
+        done
+        pg_isready -h localhost
+
+    - name: Run installcheck
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        make USE_PGXS=1 installcheck
+
+    - name: Show PostgreSQL log on failure
+      if: failure()
+      run: |
+        if [ -f $HOME/pgdata/logfile ]; then
+          echo "=== PostgreSQL log ==="
+          cat $HOME/pgdata/logfile
+        fi
+
+    - name: Show regression diffs on failure
+      if: failure()
+      run: |
+        if [ -f regression.diffs ]; then
+          echo "=== Regression diffs ==="
+          cat regression.diffs
+        fi
+
+    - name: Stop PostgreSQL
+      if: always()
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        pg_ctl -D $HOME/pgdata stop || true
+
+    - name: Upload test artifacts on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: installcheck-artifacts-pg${{ matrix.pg_version }}
+        path: |
+          regression.diffs
+          regression.out
+          results/
+          ~/pgdata/logfile
+        if-no-files-found: ignore
