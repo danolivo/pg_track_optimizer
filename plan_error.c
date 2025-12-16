@@ -123,11 +123,14 @@ prediction_walker(PlanState *pstate, void *context)
 			/*
 			 * In leaf nodes we should get into account filtered tuples
 			 *
-			 * XXX:
-			 * It seems that nfiltered1 counts the number of tuples filtered by
-			 * a joinqual clause. The nfiltered2 counts the number of tuples,
-			 * removed by an 'other' clause. So, should we consider them not
-			 * only in leaf nodes?
+			 * NOTE:
+			 * We don't consider filtered tuples in non-leaf nodes, because
+			 * the work (and the errors) have already done in subtrees.
+			 * Including this value in a JOIN node will be double-counting of
+			 * an error. In leaf nodes the situation is different: the executor
+			 * fetches tuples from disk and this work may cost a lot in case of
+			 * highly selective filter. So, we need to take into account these
+			 * hidden efforts.
 			 */
 			if (tmp_counter == ctx->counter)
 				wntuples += instr->nfiltered1 + instr->nfiltered2 +
