@@ -9,7 +9,7 @@ A lightweight PostgreSQL extension for detecting suboptimal query plans by analy
 
 ## Overview
 
-PostgreSQL's query planner makes sophisticated predictions about row counts, selectivity, and execution costs to choose optimal query plans. However, when these predictions are significantly wrong—due to outdated statistics, data skew, correlation, or complex predicates—the planner may choose suboptimal execution strategies.
+PostgreSQL's query planner makes sophisticated predictions about row counts, selectivity, and execution costs to choose optimal query plans. However, these predictions may be incorrect due to outdated statistics, data skew, correlation, or complex predicates. As a result, the planner may choose suboptimal execution strategies.
 
 In large databases with thousands of queries, identifying which plans suffer from poor cardinality estimates is like finding a needle in a haystack. **pg_track_optimizer** solves this by automatically tracking the estimation error for every query and surfacing the worst offenders.
 
@@ -26,20 +26,20 @@ error = |log(actual_rows / estimated_rows)|
 
 Three error metrics are computed:
 - **relative_error**: Simple average across all plan nodes
-- **error2**: Quadratic mean (RMS) - emphasises large errors
+- **error2**: Quadratic mean (RMS) - penalises large errors
 - **time_weighted_error**: Weighted by execution time - highlights costly errors
 
 Queries with high error values are candidates for investigation: missing indexes, outdated statistics, or planner limitations.
 
 ## Features
 
-- 🎯 **Automatic detection** of queries with poor cardinality estimates
-- 📊 **Multiple error metrics** to identify different types of issues
-- 🔍 **Shared memory tracking** - zero disk overhead during operation
-- ⚡ **Minimal performance impact** - efficient executor hooks
-- 📝 **Query logging** - automatically log EXPLAIN for problematic queries
-- 💾 **Persistent storage** - optional flush to disk for long-term analysis
-- 🔧 **Flexible modes** - track all queries or only problematic ones
+-  **Automatic detection** of queries with poor cardinality estimates
+-  **Multiple error metrics** to identify different types of issues
+-  **Shared memory tracking** - zero disk overhead during operation
+-  **Minimal performance impact** - efficient executor hooks
+-  **Query logging** - automatically log EXPLAIN for problematic queries
+-  **Persistent storage** - optional flush to disk for long-term analysis
+-  **Flexible modes** - track all queries or only problematic ones
 
 ## Installation
 
@@ -215,14 +215,14 @@ SELECT pg_track_optimizer_reset();
 
 ## Understanding Error Metrics
 
-The extension calculates error using logarithmic scale to handle the wide range of row count estimates:
+The extension calculates error using a logarithmic scale to handle the wide range of row count estimates:
 
 ```
 error = |log(actual_rows / estimated_rows)|
 ```
 
 **Why logarithmic?**
-- An estimate of 10 when actual is 100 has the same error magnitude as 100→10
+- An estimate of 10 when the actual is 100 has the same error magnitude as 100→10
 - Prevents massive row counts from dominating the metric
 - Aligns with how the planner internally handles costs
 
@@ -234,7 +234,7 @@ error = |log(actual_rows / estimated_rows)|
 
 ## Limitations
 
-- **Leaf node filtering**: Currently only counts filtered tuples (`nfiltered1`, `nfiltered2`) for leaf nodes (scans), not intermediate join nodes
+- **Leaf node filtering**: Currently, only counts filtered tuples (`nfiltered1`, `nfiltered2`) for leaf nodes (scans), not intermediate join nodes
 - **Never-executed nodes**: Nodes in unexecuted branches (e.g., alternative index paths) are skipped
 - **Memory overhead**: Large query texts consume shared memory
 - **No automatic cleanup**: Statistics must be manually reset or flushed
