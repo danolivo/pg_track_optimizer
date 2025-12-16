@@ -74,9 +74,9 @@ typedef struct DSMOptimizerTrackerEntry
 {
 	DSMOptimizerTrackerKey	key;
 
-	double					relative_error;
-	double					quadratic_error;
-	double					error2;
+	double					mean_error;
+	double					rms_error;
+	double					time_error;
 	dsa_pointer				querytext_ptr;
 	int32					assessed_nodes;
 	int32					total_nodes;
@@ -320,9 +320,9 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	key.dbOid = MyDatabaseId;
 	key.queryId = queryDesc->plannedstmt->queryId;
 	entry = dshash_find_or_insert(htab, &key, &found);
-	entry->relative_error = ctx->error;
-	entry->quadratic_error = ctx->quadratic_error;
-	entry->error2 = ctx->time_weighted_error;
+	entry->mean_error = ctx->mean_error;
+	entry->rms_error = ctx->rms_error;
+	entry->time_error = ctx->time_error;
 	entry->assessed_nodes = ctx->nnodes;
 	entry->total_nodes = ctx->counter;
 	entry->exec_time = ctx->totaltime;
@@ -532,9 +532,9 @@ to_show_data(PG_FUNCTION_ARGS)
 		str = (char *) dsa_get_address(htab_dsa, entry->querytext_ptr);
 		values[i++] = CStringGetTextDatum(str);
 
-		values[i++] = Float8GetDatum(entry->relative_error);
-		values[i++] = Float8GetDatum(entry->quadratic_error);
-		values[i++] = Float8GetDatum(entry->error2);
+		values[i++] = Float8GetDatum(entry->mean_error);
+		values[i++] = Float8GetDatum(entry->rms_error);
+		values[i++] = Float8GetDatum(entry->time_error);
 		values[i++] = Int32GetDatum(entry->assessed_nodes);
 		values[i++] = Int32GetDatum(entry->total_nodes);
 		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
@@ -611,9 +611,9 @@ static const uint32 DATA_FORMAT_VERSION = 1;
 static const DSMOptimizerTrackerEntry EOFEntry = {
 											.key.dbOid = 0,
 											.key.queryId = 0,
-											.relative_error = -2.,
-											.quadratic_error = -2.,
-											.error2 = -2.,
+											.mean_error = -2.,
+											.rms_error = -2.,
+											.time_error = -2.,
 											.querytext_ptr = 0,
 											.assessed_nodes = -1,
 											.total_nodes = -1,
@@ -802,9 +802,9 @@ _load_hash_table(TODSMRegistry *state)
 		 * TODO: copy all data in one operation. At least we will not do
 		 * annoying copy DSM pointer.
 		 */
-		entry->relative_error = disk_entry.relative_error;
-		entry->quadratic_error = disk_entry.quadratic_error;
-		entry->error2 = disk_entry.error2;
+		entry->mean_error = disk_entry.mean_error;
+		entry->rms_error = disk_entry.rms_error;
+		entry->time_error = disk_entry.time_error;
 		entry->assessed_nodes = disk_entry.assessed_nodes;
 		entry->total_nodes = disk_entry.total_nodes;
 		entry->exec_time = disk_entry.exec_time;
