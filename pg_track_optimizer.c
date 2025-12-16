@@ -405,7 +405,7 @@ _PG_init(void)
 	EnableQueryId();
 
 	DefineCustomEnumVariable("pg_track_optimizer.mode",
-							 "Mode of the extension usage.",
+							 "Extension operation mode",
 							 NULL,
 							 &track_mode,
 							 TRACK_MODE_DISABLED,
@@ -417,8 +417,8 @@ _PG_init(void)
 							 NULL);
 
 	DefineCustomRealVariable("pg_track_optimizer.log_min_error",
-							 "Sets the minimum planning error above which plans will be logged.",
-							 "Zero prints all plans. -1 turns this feature off.",
+							 "Sets the minimum planning error above which plans will be logged",
+							 "Zero prints all plans; -1 turns this feature off",
 							 &log_min_error,
 							 -1.0,
 							 -1.0, INT_MAX, /* Looks like such a huge error, as INT_MAX doesn't make sense */
@@ -429,7 +429,7 @@ _PG_init(void)
 							 NULL);
 
 	DefineCustomIntVariable("pg_track_optimizer.hash_mem",
-							"Maximum size of DSM memory allocated to the hash table",
+							"Maximum size of DSM memory for the hash table",
 							NULL,
 							&hash_mem,
 							4096,
@@ -689,14 +689,14 @@ _flush_hash_table(void)
 
 	(void) durable_rename(tmpfile, filename, LOG);
 	pfree(tmpfile);
-	elog(LOG, "[%s] %u records stored in file %s.",
+	elog(LOG, "[%s] %u records stored in file \"%s\"",
 		 EXTENSION_NAME, counter, filename);
 	return true;
 
 error:
 	ereport(ERROR,
 			(errcode_for_file_access(),
-			 errmsg("could not write %s data file \"%s\": %m",
+			 errmsg("[%s] could not write file \"%s\": %m",
 			 EXTENSION_NAME, tmpfile)));
 
 	if (file)
@@ -760,7 +760,7 @@ _load_hash_table(TODSMRegistry *state)
 
 			if (cnt != counter)
 				elog(ERROR,
-					 "[%s] Incorrect number of records read: %u instead of %u",
+					 "[%s] incorrect number of records read: %u instead of %u",
 					 EXTENSION_NAME, counter, cnt);
 
 			/* Correct finish of the load operation */
@@ -785,7 +785,7 @@ _load_hash_table(TODSMRegistry *state)
 		if (found)
 			ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg("[%s] data file \"%s\" has duplicated record with dbOid %u and queryId "UINT64_FORMAT,
+				 errmsg("[%s] file \"%s\" has duplicate record with dbOid %u and queryId "UINT64_FORMAT,
 				 EXTENSION_NAME, filename, disk_entry.key.dbOid, disk_entry.key.queryId)));
 
 		/*
@@ -807,7 +807,7 @@ _load_hash_table(TODSMRegistry *state)
 
 	FreeFile(file);
 	pg_atomic_write_u32(&state->htab_counter, counter);
-	elog(LOG, "[%s] %u records loaded from file %s.",
+	elog(LOG, "[%s] %u records loaded from file \"%s\"",
 		 EXTENSION_NAME, counter, filename);
 	return true;
 
@@ -820,13 +820,13 @@ read_error:
 data_header_error:
 	ereport(ERROR,
 			(errcode(ERRCODE_DATA_CORRUPTED),
-			 errmsg("[%s] data file \"%s\" has an incompatible header version %d instead of %d.",
+			 errmsg("[%s] file \"%s\" has incompatible header version %d instead of %d",
 			 EXTENSION_NAME, filename, header, DATA_FILE_HEADER)));
 	goto fail;
 data_version_error:
 	ereport(ERROR,
 			(errcode(ERRCODE_DATA_CORRUPTED),
-			 errmsg("[%s] data file \"%s\" has an incompatible PostgreSQL version %d instead of %d.",
+			 errmsg("[%s] file \"%s\" has incompatible data format version %d instead of %d",
 			 EXTENSION_NAME, filename, pgver, DATA_FORMAT_VERSION)));
 fail:
 	if (file)
