@@ -1,3 +1,15 @@
+/*-------------------------------------------------------------------------
+ *
+ * plan_error.h
+ *		Pass through a query plan and calculate estimation error.
+ *
+ * Copyright (c) 2024-2025 Andrei Lepikhov
+ *
+ * This software may be modified and distributed under the terms
+ * of the MIT licence. See the LICENSE file for details.
+ *
+ *-------------------------------------------------------------------------
+ */
 #ifndef PLAN_ERROR_H
 #define PLAN_ERROR_H
 
