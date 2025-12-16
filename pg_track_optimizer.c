@@ -306,7 +306,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 	Assert(htab != NULL && queryDesc->plannedstmt->queryId != UINT64CONST(0));
 
-	if (!(ctx->error >= log_min_error || track_mode == TRACK_MODE_FORCED))
+	if (!(ctx->mean_error >= log_min_error || track_mode == TRACK_MODE_FORCED))
 		return false;
 
 	counter = pg_atomic_read_u32(&shared->htab_counter);
