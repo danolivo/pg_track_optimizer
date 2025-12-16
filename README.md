@@ -25,9 +25,9 @@ error = |log(actual_rows / estimated_rows)|
 ```
 
 Three error metrics are computed:
-- **relative_error**: Simple average across all plan nodes
-- **error2**: Quadratic mean (RMS) - penalises large errors
-- **time_weighted_error**: Weighted by execution time - highlights costly errors
+- **mean_error**: Simple average across all plan nodes
+- **rms_error**: Root Mean Square (RMS) - emphasises large errors
+- **time_error**: Weighted by execution time - highlights costly errors
 
 Queries with high error values are candidates for investigation: missing indexes, outdated statistics, or planner limitations.
 
@@ -111,32 +111,32 @@ SET pg_track_optimizer.hash_mem = 10240;
 ```sql
 SELECT
     querytext,
-    relative_error,
-    error2,
-    time_weighted_error,
+    mean_error,
+    rms_error,
+    time_error,
     nodes_assessed,
     nodes_total,
     exec_time,
     nexecs
 FROM pg_track_optimizer()
-ORDER BY relative_error DESC
+ORDER BY mean_error DESC
 LIMIT 10;
 ```
 
 **Example output:**
 ```
-                    querytext                     | relative_error | error2 | nodes_assessed | nexecs
---------------------------------------------------+----------------+--------+----------------+--------
- SELECT * FROM orders WHERE customer_id = $1      |           4.23 |   4.89 |              5 |    142
- SELECT COUNT(*) FROM products WHERE category...  |           3.87 |   4.12 |              3 |     23
+                    querytext                     | mean_error | rms_error | time_error | nodes_assessed | nexecs
+--------------------------------------------------+------------+-----------+------------+----------------+--------
+ SELECT * FROM orders WHERE customer_id = $1      |       4.23 |      4.89 |       4.56 |              5 |    142
+ SELECT COUNT(*) FROM products WHERE category...  |       3.87 |      4.12 |       3.95 |              3 |     23
 ```
 
 ### Column Descriptions
 
 - **querytext**: The SQL query (normalized, with literals replaced by `$1`, `$2`, etc.)
-- **relative_error**: Average log-scale error across plan nodes
-- **error2**: Quadratic error metric (emphasises large estimation errors)
-- **time_weighted_error**: Error weighted by execution time (highlights costly mistakes)
+- **mean_error**: Simple average of log-scale errors across plan nodes
+- **rms_error**: Root Mean Square error (emphasises large estimation errors)
+- **time_error**: Error weighted by execution time (highlights costly mistakes)
 - **nodes_assessed**: Number of plan nodes analysed
 - **nodes_total**: Total plan nodes (some may be skipped, e.g., never-executed branches)
 - **exec_time**: Total execution time across all executions (milliseconds)
@@ -156,19 +156,19 @@ Statistics persist in shared memory until `pg_track_optimizer_reset()` is called
 
 ## Interpreting Results
 
-### High `relative_error`
+### High `mean_error`
 Indicates consistent estimation errors across the plan. Possible causes:
 - **Outdated statistics**: Run `ANALYZE` on affected tables
 - **Data correlation**: Planner assumes independence between columns
 - **Complex predicates**: Non-linear filters that statistics can't capture
 
-### High `error2`
+### High `rms_error`
 Suggests a few plan nodes with very large errors. Often indicates:
 - **Wrong join order**: Planner underestimated join result size
 - **Poor index choice**: Estimated selectivity was far off
 - **Partition pruning failure**: Planner scanned more partitions than needed
 
-### High `time_weighted_error`
+### High `time_error`
 Shows that errors occurred in expensive parts of the plan:
 - **Sequential scans with wrong row estimates**: Should have used an index
 - **Nested loops with underestimated inner rows**: Should have used hash join
@@ -190,11 +190,11 @@ The extension will automatically track queries exceeding the error threshold. Pr
 ```sql
 SELECT
     querytext,
-    relative_error,
+    mean_error,
     nexecs,
     exec_time / nexecs AS avg_time_ms
 FROM pg_track_optimizer()
-WHERE relative_error > 2.0
+WHERE mean_error > 2.0
 ORDER BY exec_time DESC;
 ```
 
