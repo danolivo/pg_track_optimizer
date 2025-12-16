@@ -12,15 +12,16 @@ EXTVERSION = 0.1
 DATA = pg_track_optimizer--0.1.sql
 
 REGRESS = pg_track_optimizer interface join_filtering
-EXTRA_REGRESS_OPTS=--temp-config=$(top_srcdir)/$(subdir)/pg_track_optimizer.conf
 
 ifdef USE_PGXS
+EXTRA_REGRESS_OPTS=--temp-config=$(CURDIR)/pg_track_optimizer.conf
 PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 else
 subdir = contrib/pg_track_optimizer
 top_builddir = ../..
+EXTRA_REGRESS_OPTS=--temp-config=$(top_srcdir)/$(subdir)/pg_track_optimizer.conf
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
