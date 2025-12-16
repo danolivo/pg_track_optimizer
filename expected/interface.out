@@ -6,9 +6,9 @@ CREATE EXTENSION pg_track_optimizer;
  dboid           | oid              |           |          | 
  queryid         | bigint           |           |          | 
  querytext       | text             |           |          | 
- relative_error  | double precision |           |          | 
- quadratic_error | double precision |           |          | 
- error2          | double precision |           |          | 
+ mean_error  | double precision |           |          | 
+ rms_error | double precision |           |          | 
+ time_error          | double precision |           |          | 
  nodes_assessed  | integer          |           |          | 
  nodes_total     | integer          |           |          | 
  exec_time       | double precision |           |          | 
