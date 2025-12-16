@@ -3,10 +3,10 @@
  * pg_track_optimizer.c
  *		Passing through a query plan, detect planning issues.
  *
- * Copyright (c) 2024 Andrei Lepikhov
+ * Copyright (c) 2024-2025 Andrei Lepikhov
  *
  * This software may be modified and distributed under the terms
- * of the MIT license. See the LICENSE file for details.
+ * of the MIT licence. See the LICENSE file for details.
  *
  * IDENTIFICATION
  *	  contrib/pg_track_optimizer/pg_track_optimizer.c
