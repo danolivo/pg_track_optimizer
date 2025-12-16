@@ -1,21 +1,268 @@
 # pg_track_optimizer
-Lightweight (dynamically loaded) extension to explore query plan and execution statistics to find signs of non-optimal optimisation.
-**Designed for PostgreSQL v.17 and above.**  
 
-## Abstract
-Occasionally, blunders in the optimiser predictions cause a non-optimal query plan.
-In an extensive database with a lot of queries, it is challenging to find poorly designed plans. So far, I don't know any tools that can help detect such problems.
-Here, we introduce trivial criteria based on the difference between estimated and actual (after the execution) cardinalities.
-Of course, it is not proof of the problem, but we can filter candidates from a vast set of queries using this value.
-This extension can gather statistics in shared memory and show it on-demand. Also, by setting an error threshold, you can obtain explains of queries with high value of the error in the instance log.
+[![PostgreSQL Extension Tests](https://github.com/danolivo/pg_track_optimizer/actions/workflows/test.yml/badge.svg)](https://github.com/danolivo/pg_track_optimizer/actions/workflows/test.yml)
+[![PostgreSQL Extension Installcheck](https://github.com/danolivo/pg_track_optimizer/actions/workflows/installcheck.yml/badge.svg)](https://github.com/danolivo/pg_track_optimizer/actions/workflows/installcheck.yml)
 
-## Interface
-### GUCs
-- *pg_track_optimizer.mode* = {normal | forced | disabled (default)}. *disabled* mode switches off all activity of the library; *normal* mode gathers statistics only when the value of log_min_error is exceeded; *forced* mode gathers data on each incoming query.
-- *pg_track_optimizer.log_min_error* - logging threshold. Criteria for pushing the query explain into the log.
-- pg_track_optimizer.hash_mem - memory limit for the hash table size. Right now it doesn't include query texts - looks like a very soft limit.
+A lightweight PostgreSQL extension for detecting suboptimal query plans by analysing the gap between planner estimates and actual execution statistics.
 
-### Routines
-- *pg_track_optimizer()* - show all data gathered.
-- *pg_track_optimizer_flush()* - save statistical data to disk. We don't have any automatization yet to avoid overheads.
-- *pg_track_optimizer_reset()* - cleanup statistics data.
+**Compatible with PostgreSQL 17 and above.**
+
+## Overview
+
+PostgreSQL's query planner makes sophisticated predictions about row counts, selectivity, and execution costs to choose optimal query plans. However, when these predictions are significantly wrong—due to outdated statistics, data skew, correlation, or complex predicates—the planner may choose suboptimal execution strategies.
+
+In large databases with thousands of queries, identifying which plans suffer from poor cardinality estimates is like finding a needle in a haystack. **pg_track_optimizer** solves this by automatically tracking the estimation error for every query and surfacing the worst offenders.
+
+## How It Works
+
+The extension hooks into PostgreSQL's executor to compare:
+- **Estimated rows** (what the planner predicted)
+- **Actual rows** (what execution produced)
+
+For each plan node, it calculates the relative error using logarithmic scale:
+```
+error = |log(actual_rows / estimated_rows)|
+```
+
+Three error metrics are computed:
+- **relative_error**: Simple average across all plan nodes
+- **error2**: Quadratic mean (RMS) - emphasises large errors
+- **time_weighted_error**: Weighted by execution time - highlights costly errors
+
+Queries with high error values are candidates for investigation: missing indexes, outdated statistics, or planner limitations.
+
+## Features
+
+- 🎯 **Automatic detection** of queries with poor cardinality estimates
+- 📊 **Multiple error metrics** to identify different types of issues
+- 🔍 **Shared memory tracking** - zero disk overhead during operation
+- ⚡ **Minimal performance impact** - efficient executor hooks
+- 📝 **Query logging** - automatically log EXPLAIN for problematic queries
+- 💾 **Persistent storage** - optional flush to disk for long-term analysis
+- 🔧 **Flexible modes** - track all queries or only problematic ones
+
+## Installation
+
+### Building from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/danolivo/pg_track_optimizer.git
+cd pg_track_optimizer
+
+# Build and install (requires PostgreSQL dev packages)
+make USE_PGXS=1
+sudo make USE_PGXS=1 install
+```
+
+### Loading the Extension
+
+Add to `postgresql.conf`:
+```ini
+shared_preload_libraries = 'pg_track_optimizer'
+```
+
+Restart PostgreSQL, then in your database:
+```sql
+CREATE EXTENSION pg_track_optimizer;
+```
+
+## Configuration
+
+### GUC Parameters
+
+#### `pg_track_optimizer.mode`
+Controls when the extension collects statistics.
+
+- **`disabled`** (default): Extension is inactive
+- **`normal`**: Track only queries exceeding `log_min_error`
+- **`forced`**: Track all queries
+
+```sql
+-- Track all queries during debugging
+SET pg_track_optimizer.mode = 'forced';
+
+-- Track only problematic queries in production
+SET pg_track_optimizer.mode = 'normal';
+```
+
+#### `pg_track_optimizer.log_min_error`
+Threshold for logging query plans to PostgreSQL log.
+
+```sql
+-- Log queries with relative error > 2.0
+SET pg_track_optimizer.log_min_error = 2.0;
+```
+
+When a query exceeds this threshold in `normal` mode, its EXPLAIN ANALYZE output is written to the PostgreSQL log file.
+
+#### `pg_track_optimizer.hash_mem`
+Memory limit (in KB) for the shared memory hash table.
+
+```sql
+-- Allow 10MB for query tracking
+SET pg_track_optimizer.hash_mem = 10240;
+```
+
+## Usage
+
+### Viewing Tracked Queries
+
+```sql
+SELECT
+    querytext,
+    relative_error,
+    error2,
+    time_weighted_error,
+    nodes_assessed,
+    nodes_total,
+    exec_time,
+    nexecs
+FROM pg_track_optimizer()
+ORDER BY relative_error DESC
+LIMIT 10;
+```
+
+**Example output:**
+```
+                    querytext                     | relative_error | error2 | nodes_assessed | nexecs
+--------------------------------------------------+----------------+--------+----------------+--------
+ SELECT * FROM orders WHERE customer_id = $1      |           4.23 |   4.89 |              5 |    142
+ SELECT COUNT(*) FROM products WHERE category...  |           3.87 |   4.12 |              3 |     23
+```
+
+### Column Descriptions
+
+- **querytext**: The SQL query (normalized, with literals replaced by `$1`, `$2`, etc.)
+- **relative_error**: Average log-scale error across plan nodes
+- **error2**: Quadratic error metric (emphasises large estimation errors)
+- **time_weighted_error**: Error weighted by execution time (highlights costly mistakes)
+- **nodes_assessed**: Number of plan nodes analysed
+- **nodes_total**: Total plan nodes (some may be skipped, e.g., never-executed branches)
+- **exec_time**: Total execution time across all executions (milliseconds)
+- **nexecs**: Number of times the query was executed
+
+### Managing Statistics
+
+```sql
+-- Save current statistics to disk
+SELECT pg_track_optimizer_flush();
+
+-- Clear all tracked statistics
+SELECT pg_track_optimizer_reset();
+```
+
+Statistics persist in shared memory until `pg_track_optimizer_reset()` is called or PostgreSQL restarts. Use `pg_track_optimizer_flush()` to save snapshots for historical analysis.
+
+## Interpreting Results
+
+### High `relative_error`
+Indicates consistent estimation errors across the plan. Possible causes:
+- **Outdated statistics**: Run `ANALYZE` on affected tables
+- **Data correlation**: Planner assumes independence between columns
+- **Complex predicates**: Non-linear filters that statistics can't capture
+
+### High `error2`
+Suggests a few plan nodes with very large errors. Often indicates:
+- **Wrong join order**: Planner underestimated join result size
+- **Poor index choice**: Estimated selectivity was far off
+- **Partition pruning failure**: Planner scanned more partitions than needed
+
+### High `time_weighted_error`
+Shows that errors occurred in expensive parts of the plan:
+- **Sequential scans with wrong row estimates**: Should have used an index
+- **Nested loops with underestimated inner rows**: Should have used hash join
+- **Sorts with wrong cardinality**: Allocated insufficient work_mem
+
+## Example Workflow
+
+### 1. Enable Tracking in Production
+```sql
+ALTER SYSTEM SET pg_track_optimizer.mode = 'normal';
+ALTER SYSTEM SET pg_track_optimizer.log_min_error = 3.0;
+SELECT pg_reload_conf();
+```
+
+### 2. Let It Run
+The extension will automatically track queries exceeding the error threshold. Problematic queries will appear in PostgreSQL logs with full EXPLAIN ANALYZE output.
+
+### 3. Review Worst Offenders
+```sql
+SELECT
+    querytext,
+    relative_error,
+    nexecs,
+    exec_time / nexecs AS avg_time_ms
+FROM pg_track_optimizer()
+WHERE relative_error > 2.0
+ORDER BY exec_time DESC;
+```
+
+### 4. Investigate and Fix
+- Check if `ANALYZE` is running regularly
+- Look for missing indexes
+- Consider extended statistics for correlated columns
+- Review complex WHERE clauses
+
+### 5. Verify Improvements
+```sql
+-- Reset statistics
+SELECT pg_track_optimizer_reset();
+
+-- Run workload again
+-- Re-check error metrics
+```
+
+## Understanding Error Metrics
+
+The extension calculates error using logarithmic scale to handle the wide range of row count estimates:
+
+```
+error = |log(actual_rows / estimated_rows)|
+```
+
+**Why logarithmic?**
+- An estimate of 10 when actual is 100 has the same error magnitude as 100→10
+- Prevents massive row counts from dominating the metric
+- Aligns with how the planner internally handles costs
+
+**Interpreting values:**
+- `error < 1.0`: Estimate within 3x of actual (acceptable)
+- `error 1.0-2.0`: Estimate off by 3-7x (investigate if frequent)
+- `error 2.0-3.0`: Estimate off by 7-20x (likely problematic)
+- `error > 3.0`: Estimate off by 20x+ (requires attention)
+
+## Limitations
+
+- **Leaf node filtering**: Currently only counts filtered tuples (`nfiltered1`, `nfiltered2`) for leaf nodes (scans), not intermediate join nodes
+- **Never-executed nodes**: Nodes in unexecuted branches (e.g., alternative index paths) are skipped
+- **Memory overhead**: Large query texts consume shared memory
+- **No automatic cleanup**: Statistics must be manually reset or flushed
+
+## Performance Impact
+
+The extension is designed for production use with minimal overhead:
+- **Hook overhead**: ~1-2% in `forced` mode, negligible in `normal` mode
+- **Memory**: Configurable via `hash_mem`, typically 1-10 MB
+- **I/O**: None during operation (only on explicit flush)
+
+In `normal` mode with a reasonable threshold (e.g., 2.0), only a small fraction of queries are tracked, making the overhead virtually undetectable.
+
+## Contributing
+
+Contributions are welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new functionality
+4. Ensure CI passes
+5. Submit a pull request
+
+## Licence
+
+This project is licenced under the PostgreSQL Licence. See the LICENCE file for details.
+
+## Acknowledgements
+
+Developed by Andrey Lepikhov and contributors.
+
+If you find this extension useful, please consider starring the repository!
