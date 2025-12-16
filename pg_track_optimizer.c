@@ -60,7 +60,7 @@ typedef struct TODSMRegistry
 
 /*
  * Key for the tracker hash table.
- * Forasmuch as impossible to imagine when query could be used in another
+ * Since it is impossible to imagine when a query could be used in another
  * database, use the database oid to reduce chance of collision and possible
  * other filtering options.
  */
@@ -81,7 +81,7 @@ typedef struct DSMOptimizerTrackerEntry
 	int32					assessed_nodes;
 	int32					total_nodes;
 	double					exec_time;
-	int64					nexecs; /* Number of executions have taken into account */
+	int64					nexecs; /* Number of executions taken into account */
 } DSMOptimizerTrackerEntry;
 
 static const dshash_parameters dsh_params = {
@@ -162,7 +162,7 @@ track_attach_shmem(void)
 		Assert(shared->dshh != DSHASH_HANDLE_INVALID);
 
 		htab_dsa = dsa_attach(shared->dsah);
-		/* Attach to existed hash table */
+		/* Attach to existing hash table */
 		htab = dshash_attach(htab_dsa, &dsh_params, shared->dshh, NULL);
 	}
 
@@ -219,8 +219,8 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 	msec = queryDesc->totaltime->total * 1000.0;
 
 	/*
-	 * We triggered by an estimation error. So, show only the options which
-	 * can be useful to determine possible solution.
+	 * We are triggered by an estimation error. So, show only the options which
+	 * can be useful to determine a possible solution.
 	 */
 	es->analyze = (queryDesc->instrument_options);
 	es->verbose = false;
@@ -421,7 +421,7 @@ _PG_init(void)
 							 "Zero prints all plans. -1 turns this feature off.",
 							 &log_min_error,
 							 -1.0,
-							 -1.0, INT_MAX, /* Looks like so huge error, as INT_MAX don't make a sense */
+							 -1.0, INT_MAX, /* Looks like such a huge error, as INT_MAX doesn't make sense */
 							 PGC_SUSET,
 							 0,
 							 NULL,
@@ -429,7 +429,7 @@ _PG_init(void)
 							 NULL);
 
 	DefineCustomIntVariable("pg_track_optimizer.hash_mem",
-							"Max size of DSM memory allocated to hash table",
+							"Maximum size of DSM memory allocated to the hash table",
 							NULL,
 							&hash_mem,
 							4096,
@@ -538,7 +538,7 @@ to_show_data(PG_FUNCTION_ARGS)
 }
 
 /*
- * Reset the state of this extension to default. Show clean up all additionally
+ * Reset the state of this extension to default. This will clean up all additionally
  * allocated resources and reset static and global state variables.
  */
 Datum
@@ -573,7 +573,7 @@ to_reset(PG_FUNCTION_ARGS)
 
 		if (pre <= 0)
 		{
-			/* Trigger a reboot to cleanup the state. No another solution I see */
+			/* Trigger a reboot to clean up the state. I see no other solution */
 			elog(PANIC, "Inconsistency in the pg_track_optimizer hash table state");
 		}
 	}
@@ -676,7 +676,7 @@ _flush_hash_table(void)
 	}
 	dshash_seq_term(&stat);
 
-	/* As a last record write EOF record and a number of records have written */
+	/* As the last record, write an EOF record and the number of records that have been written */
 	if (fwrite(&EOFEntry, sizeof(DSMOptimizerTrackerEntry), 1, file) != 1 ||
 		fwrite(&counter, sizeof(uint32), 1, file) != 1)
 		goto error;
@@ -728,7 +728,7 @@ _load_hash_table(TODSMRegistry *state)
 	{
 		if (errno != ENOENT)
 			goto read_error;
-		/* File not exists */
+		/* File does not exist */
 		return false;
 	}
 
@@ -820,13 +820,13 @@ read_error:
 data_header_error:
 	ereport(ERROR,
 			(errcode(ERRCODE_DATA_CORRUPTED),
-			 errmsg("[%s] data file \"%s\" has incompatible header version %d instead of %d.",
+			 errmsg("[%s] data file \"%s\" has an incompatible header version %d instead of %d.",
 			 EXTENSION_NAME, filename, header, DATA_FILE_HEADER)));
 	goto fail;
 data_version_error:
 	ereport(ERROR,
 			(errcode(ERRCODE_DATA_CORRUPTED),
-			 errmsg("[%s] data file \"%s\" has incompatible postgres version %d instead of %d.",
+			 errmsg("[%s] data file \"%s\" has an incompatible PostgreSQL version %d instead of %d.",
 			 EXTENSION_NAME, filename, pgver, DATA_FORMAT_VERSION)));
 fail:
 	if (file)

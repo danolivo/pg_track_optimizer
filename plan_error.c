@@ -39,7 +39,7 @@ prediction_walker(PlanState *pstate, void *context)
 		return false;
 
 	/*
-	 * Finish the node before an analysis. And only after that we can touch any
+	 * Finish the node before analysis. And only after that we can touch any
 	 * instrument fields.
 	 */
 
@@ -54,7 +54,7 @@ prediction_walker(PlanState *pstate, void *context)
 		return false;
 
 	/*
-	 * Calculate number of rows predicted by the optimizer and really passed
+	 * Calculate the number of rows predicted by the optimizer and really passed
 	 * through the node. This simplistic code becomes a bit tricky in the case
 	 * of parallel workers.
 	 *
@@ -146,7 +146,7 @@ prediction_walker(PlanState *pstate, void *context)
 		{
 			double	ntuples = pstate->instrument->ntuples;
 
-			/* In leaf nodes we should get into account filtered tuples */
+			/* In leaf nodes we should take into account filtered tuples */
 			if (tmp_counter == ctx->counter)
 				ntuples += (pstate->instrument->nfiltered1 +
 												pstate->instrument->nfiltered2 +
@@ -161,7 +161,7 @@ prediction_walker(PlanState *pstate, void *context)
 		plan_rows = pstate->plan->plan_rows;
 		real_rows = pstate->instrument->ntuples / nloops;
 
-		/* In leaf nodes we should get into account filtered tuples */
+		/* In leaf nodes we should take into account filtered tuples */
 		if (tmp_counter == ctx->counter)
 			real_rows += (pstate->instrument->nfiltered1 +
 									pstate->instrument->nfiltered2 +
@@ -172,7 +172,7 @@ prediction_walker(PlanState *pstate, void *context)
 	real_rows = clamp_row_est(real_rows);
 
 	/*
-	 * Now, we can calculate a value of the estimation relative error has made
+	 * Now, we can calculate the value of the relative estimation error made
 	 * by the optimizer.
 	 */
 	Assert(pstate->instrument->total > 0.0);
