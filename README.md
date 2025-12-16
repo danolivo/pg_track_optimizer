@@ -3,7 +3,7 @@ Lightweight (dynamically loaded) extension to explore query plan and execution s
 **Designed for PostgreSQL v.17 and above.**  
 
 ## Abstract
-Occasionally, blunders in the optimizer predictions cause a non-optimal query plan.
+Occasionally, blunders in the optimiser predictions cause a non-optimal query plan.
 In an extensive database with a lot of queries, it is challenging to find poorly designed plans. So far, I don't know any tools that can help detect such problems.
 Here, we introduce trivial criteria based on the difference between estimated and actual (after the execution) cardinalities.
 Of course, it is not proof of the problem, but we can filter candidates from a vast set of queries using this value.
