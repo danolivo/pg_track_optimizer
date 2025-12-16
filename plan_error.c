@@ -125,12 +125,12 @@ prediction_walker(PlanState *pstate, void *context)
 			 *
 			 * NOTE:
 			 * We don't consider filtered tuples in non-leaf nodes.
-			 * Planner's prediction on filtered tuples comes from the nrows
-			 * values of incloming and outcoming tuples.
-			 * In opposite, in leaf nodes we don't see prediction on how much
-			 * tuples planner anticipated to fetch from disk - only nrows value
-			 * of the final result. So, it makes sense to take them into account
-			 * to highlight the potential issues.
+			 * The planner's prediction for filtered tuples comes from the nrows
+			 * values of incoming and outgoing tuples.
+			 * In contrast, in leaf nodes we don't see prediction on how many
+			 * tuples the planner anticipated to fetch from disk - only the nrows
+			 * value of the final result. So, it makes sense to take them into
+			 * account to highlight the potential issues.
 			 */
 			if (tmp_counter == ctx->counter)
 				wntuples += instr->nfiltered1 + instr->nfiltered2 +
@@ -143,7 +143,7 @@ prediction_walker(PlanState *pstate, void *context)
 
 		Assert(nloops >= wnloops);
 
-		/* Calculate the part of job have made by the main process */
+		/* Calculate the portion of work done by the main process */
 		if (nloops - wnloops > 0.0)
 		{
 			double	ntuples = pstate->instrument->ntuples;
