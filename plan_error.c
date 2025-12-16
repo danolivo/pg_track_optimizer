@@ -54,7 +54,7 @@ prediction_walker(PlanState *pstate, void *context)
 		return false;
 
 	/*
-	 * Calculate the number of rows predicted by the optimizer and really passed
+	 * Calculate the number of rows predicted by the optimiser and really passed
 	 * through the node. This simplistic code becomes a bit tricky in the case
 	 * of parallel workers.
 	 *
@@ -173,7 +173,7 @@ prediction_walker(PlanState *pstate, void *context)
 
 	/*
 	 * Now, we can calculate the value of the relative estimation error made
-	 * by the optimizer.
+	 * by the optimiser.
 	 */
 	Assert(pstate->instrument->total > 0.0);
 
