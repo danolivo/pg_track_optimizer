@@ -235,7 +235,7 @@ error = |log(actual_rows / estimated_rows)|
 ## Implementation Notes
 
 - **Leaf node filtering**: Filtered tuples (`nfiltered1`, `nfiltered2`) and heap fetches (`ntuples2`) are included in error calculations only for leaf nodes (scans). This reveals hidden disk I/O costs from massive page fetches that PostgreSQL's planner estimates don't expose. For non-leaf nodes like joins, the planner already estimates both input and output cardinality, so filtered tuples are implicitly visible in the estimate.
-- **Never-executed nodes**: Nodes in unexecuted branches (e.g., alternative index paths) are skipped
+- **Never-executed nodes**: Nodes in unexecuted branches (e.g., alternative index paths in conditional plans) are skipped. Without actual execution, we cannot determine how many tuples these subtrees would have produced, even for a single hypothetical call, making error calculation impossible for these paths.
 - **Memory overhead**: Large query texts consume shared memory
 - **No automatic cleanup**: Statistics must be manually reset or flushed
 
