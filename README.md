@@ -232,7 +232,7 @@ error = |log(actual_rows / estimated_rows)|
 - `error 2.0-3.0`: Estimate off by 7-20x (likely problematic)
 - `error > 3.0`: Estimate off by 20x+ (requires attention)
 
-## Limitations
+## Implementation Notes
 
 - **Leaf node filtering**: Currently, only counts filtered tuples (`nfiltered1`, `nfiltered2`) for leaf nodes (scans), not intermediate join nodes
 - **Never-executed nodes**: Nodes in unexecuted branches (e.g., alternative index paths) are skipped
