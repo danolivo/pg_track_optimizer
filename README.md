@@ -226,7 +226,7 @@ error = |log(actual_rows / estimated_rows)|
 - Prevents massive row counts from dominating the metric
 - Aligns with how the planner internally handles costs
 
-**Interpreting values:**
+**Interpreting values (example classification - specific boundaries may vary for different databases and queries):**
 - `error < 1.0`: Estimate within 3x of actual (acceptable)
 - `error 1.0-2.0`: Estimate off by 3-7x (investigate if frequent)
 - `error 2.0-3.0`: Estimate off by 7-20x (likely problematic)
