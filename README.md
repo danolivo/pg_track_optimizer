@@ -260,9 +260,3 @@ Contributions are welcome! Please:
 ## Licence
 
 This project is licenced under the MIT Licence. See the LICENCE file for details.
-
-## Acknowledgements
-
-Developed by Andrey Lepikhov and contributors.
-
-If you find this extension useful, please consider starring the repository!
