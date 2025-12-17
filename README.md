@@ -246,6 +246,8 @@ The extension is designed for production use with minimal overhead:
 - **Memory**: Configurable via `hash_mem`, typically 1-10 MB
 - **I/O**: None during operation (only on explicit flush)
 
+**Important note on queryId generation**: Approximately 95% of the overhead comes from queryId computation. If you already have `compute_query_id` enabled (e.g., by using `pg_stat_statements` or other extensions), the additional overhead from pg_track_optimizer becomes nearly undetectable.
+
 In `normal` mode with a reasonable threshold (e.g., 2.0), only a small fraction of queries are tracked, making the overhead virtually undetectable.
 
 ## Contributing
