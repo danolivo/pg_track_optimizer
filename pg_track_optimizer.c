@@ -74,9 +74,9 @@ typedef struct DSMOptimizerTrackerEntry
 {
 	DSMOptimizerTrackerKey	key;
 
-	double					mean_error;
+	double					avg_error;
 	double					rms_error;
-	double					time_error;
+	double					twa_error;
 	dsa_pointer				querytext_ptr;
 	int32					assessed_nodes;
 	int32					total_nodes;
@@ -306,7 +306,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 	Assert(htab != NULL && queryDesc->plannedstmt->queryId != UINT64CONST(0));
 
-	if (!(ctx->mean_error >= log_min_error || track_mode == TRACK_MODE_FORCED))
+	if (!(ctx->avg_error >= log_min_error || track_mode == TRACK_MODE_FORCED))
 		return false;
 
 	counter = pg_atomic_read_u32(&shared->htab_counter);
@@ -320,9 +320,9 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	key.dbOid = MyDatabaseId;
 	key.queryId = queryDesc->plannedstmt->queryId;
 	entry = dshash_find_or_insert(htab, &key, &found);
-	entry->mean_error = ctx->mean_error;
+	entry->avg_error = ctx->avg_error;
 	entry->rms_error = ctx->rms_error;
-	entry->time_error = ctx->time_error;
+	entry->twa_error = ctx->twa_error;
 	entry->assessed_nodes = ctx->nnodes;
 	entry->total_nodes = ctx->counter;
 	entry->exec_time = ctx->totaltime;
@@ -532,9 +532,9 @@ to_show_data(PG_FUNCTION_ARGS)
 		str = (char *) dsa_get_address(htab_dsa, entry->querytext_ptr);
 		values[i++] = CStringGetTextDatum(str);
 
-		values[i++] = Float8GetDatum(entry->mean_error);
+		values[i++] = Float8GetDatum(entry->avg_error);
 		values[i++] = Float8GetDatum(entry->rms_error);
-		values[i++] = Float8GetDatum(entry->time_error);
+		values[i++] = Float8GetDatum(entry->twa_error);
 		values[i++] = Int32GetDatum(entry->assessed_nodes);
 		values[i++] = Int32GetDatum(entry->total_nodes);
 		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
@@ -611,9 +611,9 @@ static const uint32 DATA_FORMAT_VERSION = 1;
 static const DSMOptimizerTrackerEntry EOFEntry = {
 											.key.dbOid = 0,
 											.key.queryId = 0,
-											.mean_error = -2.,
+											.avg_error = -2.,
 											.rms_error = -2.,
-											.time_error = -2.,
+											.twa_error = -2.,
 											.querytext_ptr = 0,
 											.assessed_nodes = -1,
 											.total_nodes = -1,
@@ -802,9 +802,9 @@ _load_hash_table(TODSMRegistry *state)
 		 * TODO: copy all data in one operation. At least we will not do
 		 * annoying copy DSM pointer.
 		 */
-		entry->mean_error = disk_entry.mean_error;
+		entry->avg_error = disk_entry.avg_error;
 		entry->rms_error = disk_entry.rms_error;
-		entry->time_error = disk_entry.time_error;
+		entry->twa_error = disk_entry.twa_error;
 		entry->assessed_nodes = disk_entry.assessed_nodes;
 		entry->total_nodes = disk_entry.total_nodes;
 		entry->exec_time = disk_entry.exec_time;

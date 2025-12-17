@@ -25,9 +25,9 @@ error = |log(actual_rows / estimated_rows)|
 ```
 
 Three error metrics are computed:
-- **mean_error**: Simple average across all plan nodes
+- **avg_error**: Simple average across all plan nodes
 - **rms_error**: Root Mean Square (RMS) - emphasises large errors
-- **time_error**: Weighted by execution time - highlights costly errors
+- **twa_error**: Time-Weighted Average (TWA) - highlights errors in time-consuming nodes
 
 Queries with high error values are candidates for investigation: missing indexes, outdated statistics, or planner limitations.
 
@@ -111,21 +111,21 @@ SET pg_track_optimizer.hash_mem = 10240;
 ```sql
 SELECT
     querytext,
-    mean_error,
+    avg_error,
     rms_error,
-    time_error,
+    twa_error,
     nodes_assessed,
     nodes_total,
     exec_time,
     nexecs
 FROM pg_track_optimizer()
-ORDER BY mean_error DESC
+ORDER BY avg_error DESC
 LIMIT 10;
 ```
 
 **Example output:**
 ```
-                    querytext                     | mean_error | rms_error | time_error | nodes_assessed | nexecs
+                    querytext                     | avg_error | rms_error | twa_error | nodes_assessed | nexecs
 --------------------------------------------------+------------+-----------+------------+----------------+--------
  SELECT * FROM orders WHERE customer_id = $1      |       4.23 |      4.89 |       4.56 |              5 |    142
  SELECT COUNT(*) FROM products WHERE category...  |       3.87 |      4.12 |       3.95 |              3 |     23
@@ -134,9 +134,9 @@ LIMIT 10;
 ### Column Descriptions
 
 - **querytext**: The SQL query (normalized, with literals replaced by `$1`, `$2`, etc.)
-- **mean_error**: Simple average of log-scale errors across plan nodes
-- **rms_error**: Root Mean Square error (emphasises large estimation errors)
-- **time_error**: Error weighted by execution time (highlights costly mistakes)
+- **avg_error**: Simple average of log-scale errors across plan nodes
+- **rms_error**: Root Mean Square (RMS) error - emphasises large estimation errors
+- **twa_error**: Time-Weighted Average (TWA) error - highlights estimation errors in time-consuming nodes
 - **nodes_assessed**: Number of plan nodes analysed
 - **nodes_total**: Total plan nodes (some may be skipped, e.g., never-executed branches)
 - **exec_time**: Total execution time across all executions (milliseconds)
@@ -156,7 +156,7 @@ Statistics persist in shared memory until `pg_track_optimizer_reset()` is called
 
 ## Interpreting Results
 
-### High `mean_error`
+### High `avg_error`
 Indicates consistent estimation errors across the plan. Possible causes:
 - **Outdated statistics**: Run `ANALYZE` on affected tables
 - **Data correlation**: Planner assumes independence between columns
@@ -168,8 +168,8 @@ Suggests a few plan nodes with very large errors. Often indicates:
 - **Poor index choice**: Estimated selectivity was far off
 - **Partition pruning failure**: Planner scanned more partitions than needed
 
-### High `time_error`
-Shows that errors occurred in expensive parts of the plan:
+### High `twa_error`
+Shows that estimation errors occurred in the most time-consuming parts of the plan:
 - **Sequential scans with wrong row estimates**: Should have used an index
 - **Nested loops with underestimated inner rows**: Should have used hash join
 - **Sorts with wrong cardinality**: Allocated insufficient work_mem
@@ -190,11 +190,11 @@ The extension will automatically track queries exceeding the error threshold. Pr
 ```sql
 SELECT
     querytext,
-    mean_error,
+    avg_error,
     nexecs,
     exec_time / nexecs AS avg_time_ms
 FROM pg_track_optimizer()
-WHERE mean_error > 2.0
+WHERE avg_error > 2.0
 ORDER BY exec_time DESC;
 ```
 

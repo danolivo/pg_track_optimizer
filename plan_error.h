@@ -32,9 +32,9 @@ typedef struct PlanEstimatorContext
 	int 	counter;
 
 	/* Different types of planning error may be placed here */
-	double	mean_error;
+	double	avg_error;
 	double	rms_error;
-	double	time_error;
+	double	twa_error;
 } PlanEstimatorContext;
 
 #endif /* PLAN_ERROR_H */

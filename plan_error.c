@@ -180,11 +180,11 @@ prediction_walker(PlanState *pstate, void *context)
 	Assert(pstate->instrument->total > 0.0);
 
 	node_error = fabs(log(real_rows / plan_rows));
-	ctx->mean_error += node_error;
+	ctx->avg_error += node_error;
 	ctx->rms_error += node_error * node_error;
 	relative_time = pstate->instrument->total /
 									pstate->instrument->nloops / ctx->totaltime;
-	ctx->time_error += node_error * relative_time;
+	ctx->twa_error += node_error * relative_time;
 	ctx->nnodes++;
 
 	return false;
@@ -200,9 +200,9 @@ prediction_walker(PlanState *pstate, void *context)
 double
 plan_error(PlanState *pstate, double totaltime, PlanEstimatorContext *ctx)
 {
-	ctx->mean_error = 0.;
+	ctx->avg_error = 0.;
 	ctx->rms_error = 0.;
-	ctx->time_error = 0.;
+	ctx->twa_error = 0.;
 	ctx->totaltime = totaltime;
 	ctx->nnodes = 0;
 	ctx->counter = 0;
@@ -213,13 +213,13 @@ plan_error(PlanState *pstate, double totaltime, PlanEstimatorContext *ctx)
 	/* Finally, average on the number of nodes */
 	if (ctx->nnodes > 0)
 	{
-		ctx->mean_error /= ctx->nnodes;
+		ctx->avg_error /= ctx->nnodes;
 		ctx->rms_error = sqrt(ctx->rms_error / ctx->nnodes);
-		ctx->time_error /= ctx->nnodes;
+		ctx->twa_error /= ctx->nnodes;
 	}
 	else
 		/* No nodes considered - no estimation can be made. */
-		ctx->mean_error = ctx->rms_error = ctx->time_error = -1.;
+		ctx->avg_error = ctx->rms_error = ctx->twa_error = -1.;
 
-	return ctx->mean_error;
+	return ctx->avg_error;
 }
