@@ -215,7 +215,7 @@ SELECT pg_track_optimizer_reset();
 
 ## Understanding Error Metrics
 
-The extension calculates error using a logarithmic scale to handle the wide range of row count estimates:
+The extension calculates estimation error in a node using logarithmic scale to handle the wide range of row count estimates:
 
 ```
 error = |log(actual_rows / estimated_rows)|
