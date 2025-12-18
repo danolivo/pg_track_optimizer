@@ -9,6 +9,7 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT avg_error		float8,
 	OUT rms_error		float8,
 	OUT twa_error		float8,
+	OUT wca_error		float8,
 	OUT nodes_assessed  integer,
 	OUT nodes_total     integer,
 	OUT exec_time       float8,

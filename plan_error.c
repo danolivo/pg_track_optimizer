@@ -27,6 +27,7 @@ prediction_walker(PlanState *pstate, void *context)
 	double					nloops;
 	int						tmp_counter;
 	double					relative_time;
+	double					relative_cost;
 	double					node_error;
 
 	/* At first, increment the counter */
@@ -185,6 +186,11 @@ prediction_walker(PlanState *pstate, void *context)
 	relative_time = pstate->instrument->total /
 									pstate->instrument->nloops / ctx->totaltime;
 	ctx->twa_error += node_error * relative_time;
+
+	/* Accumulate total cost for later normalisation */
+	ctx->totalcost += pstate->plan->total_cost;
+	relative_cost = pstate->plan->total_cost;
+	ctx->wca_error += node_error * relative_cost;
 	ctx->nnodes++;
 
 	return false;
@@ -203,6 +209,8 @@ plan_error(PlanState *pstate, double totaltime, PlanEstimatorContext *ctx)
 	ctx->avg_error = 0.;
 	ctx->rms_error = 0.;
 	ctx->twa_error = 0.;
+	ctx->totalcost = 0.;
+	ctx->wca_error = 0.;
 	ctx->totaltime = totaltime;
 	ctx->nnodes = 0;
 	ctx->counter = 0;
@@ -216,10 +224,13 @@ plan_error(PlanState *pstate, double totaltime, PlanEstimatorContext *ctx)
 		ctx->avg_error /= ctx->nnodes;
 		ctx->rms_error = sqrt(ctx->rms_error / ctx->nnodes);
 		ctx->twa_error /= ctx->nnodes;
+		/* Normalise cost-weighted error by total cost */
+		if (ctx->totalcost > 0.)
+			ctx->wca_error /= ctx->totalcost;
 	}
 	else
 		/* No nodes considered - no estimation can be made. */
-		ctx->avg_error = ctx->rms_error = ctx->twa_error = -1.;
+		ctx->avg_error = ctx->rms_error = ctx->twa_error = ctx->wca_error = -1.;
 
 	return ctx->avg_error;
 }
