@@ -13,14 +13,22 @@
 #ifndef PLAN_ERROR_H
 #define PLAN_ERROR_H
 
+#include "executor/executor.h"
 #include "nodes/nodeFuncs.h"
 
 /*
  * Data structure used for error estimation as well as for statistics gathering.
+ *
+ * NOTES:
+ * 1. Need to consider that cost may be potentially zero. What about totaltime?
+ * 2. The wca_error behaves a little differently: normally, it should have a
+ * positive value, or -1 if no nodes to be taken into account. Also, it may be
+ * in [-1;0) range if total cost is zero.
  */
 typedef struct PlanEstimatorContext
 {
 	double	totaltime;
+	double	totalcost;
 
 	/* Number of nodes assessed */
 	int		nnodes;
@@ -35,10 +43,9 @@ typedef struct PlanEstimatorContext
 	double	avg_error;
 	double	rms_error;
 	double	twa_error;
-	double	totalcost;
 	double	wca_error;
 } PlanEstimatorContext;
 
-#endif /* PLAN_ERROR_H */
+extern double plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx);
 
-double plan_error(PlanState *pstate, double totaltime, PlanEstimatorContext *ctx);
+#endif /* PLAN_ERROR_H */
