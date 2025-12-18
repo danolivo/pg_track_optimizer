@@ -142,7 +142,7 @@ LIMIT 10;
 - **wca_error**: Cost-Weighted Average (WCA) error - highlights estimation errors in nodes the planner considered expensive
 - **evaluated_nodes**: Number of plan nodes analysed
 - **plan_nodes**: Total plan nodes (some may be skipped, e.g., never-executed branches)
-- **exec_time**: Total execution time across all executions (milliseconds)
+- **exec_time**: Total execution time across all executions (milliseconds). Divide by `nexecs` to get average per execution
 - **nexecs**: Number of times the query was executed
 
 ### Managing Statistics
