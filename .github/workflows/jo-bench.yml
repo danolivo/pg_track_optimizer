@@ -182,7 +182,9 @@ jobs:
             ROUND(AVG(rms_error)::numeric, 2) as rms_error_mean,
             ROUND(AVG(twa_error)::numeric, 2) as twa_error_mean,
             ROUND(AVG(wca_error)::numeric, 2) as wca_error_mean,
-            SUM(nexecs) as total_executions
+            SUM(nexecs) as total_executions,
+            ROUND(SUM(exec_time)::numeric, 2) as total_exec_time_ms,
+            SUM(blks_accessed) as total_blocks_accessed
           FROM pg_track_optimizer();
         "
 
@@ -196,6 +198,8 @@ jobs:
             ROUND(rms_error::numeric, 2) as rms_error,
             evaluated_nodes,
             plan_nodes,
+            ROUND(exec_time::numeric, 2) as exec_time_ms,
+            blks_accessed,
             nexecs
           FROM pg_track_optimizer()
           ORDER BY avg_error DESC
@@ -210,27 +214,21 @@ jobs:
 
         # Execute the benchmark query and save to temp file
         psql -d jobench -c "
-          SELECT avg.* FROM (
-            SELECT queryid, avg_error, rms_error, twa_error, wca_error
-            FROM pg_track_optimizer()
-            ORDER BY avg_error DESC LIMIT 10
-          ) AS avg
-          JOIN (
-            SELECT queryid, avg_error, rms_error, twa_error, wca_error
-            FROM pg_track_optimizer()
-            ORDER BY rms_error DESC LIMIT 10
-          ) AS rms USING (queryid)
-          JOIN (
-            SELECT queryid, avg_error, rms_error, twa_error, wca_error
-            FROM pg_track_optimizer()
-            ORDER BY twa_error DESC LIMIT 10
-          ) AS twa USING (queryid)
-          JOIN (
-            SELECT queryid, avg_error, rms_error, twa_error, wca_error
-            FROM pg_track_optimizer()
-            ORDER BY wca_error DESC LIMIT 10
-          ) AS wca USING (queryid)
-          ORDER BY queryid;
+          SELECT DISTINCT p.queryid, p.query, p.avg_error, p.rms_error,
+                 p.twa_error, p.wca_error, p.exec_time, p.blks_accessed, p.nexecs
+          FROM pg_track_optimizer() p
+          WHERE p.queryid IN (
+            SELECT queryid FROM (
+              SELECT queryid FROM pg_track_optimizer() ORDER BY avg_error DESC LIMIT 10
+              UNION
+              SELECT queryid FROM pg_track_optimizer() ORDER BY rms_error DESC LIMIT 10
+              UNION
+              SELECT queryid FROM pg_track_optimizer() ORDER BY twa_error DESC LIMIT 10
+              UNION
+              SELECT queryid FROM pg_track_optimizer() ORDER BY wca_error DESC LIMIT 10
+            ) top_queries
+          )
+          ORDER BY p.avg_error DESC;
         " > /tmp/benchmark_results.txt
 
         # Save script path and extension commit before changing directories
