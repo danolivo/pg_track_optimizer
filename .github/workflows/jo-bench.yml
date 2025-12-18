@@ -1,0 +1,217 @@
+name: JO-Bench Performance Testing
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  jo-bench:
+    name: JO-Bench on PG 17
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout extension code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libreadline-dev \
+          zlib1g-dev \
+          flex \
+          bison \
+          libxml2-dev \
+          libxslt-dev \
+          libssl-dev \
+          libxml2-utils \
+          xsltproc \
+          ccache
+
+    - name: Cache PostgreSQL build
+      uses: actions/cache@v4
+      id: pg-cache
+      with:
+        path: ~/postgresql
+        key: ${{ runner.os }}-pg-17-jobench-${{ hashFiles('.github/workflows/jo-bench.yml') }}
+
+    - name: Clone PostgreSQL 17
+      if: steps.pg-cache.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 --branch REL_17_STABLE https://github.com/postgres/postgres.git postgresql
+
+    - name: Build PostgreSQL
+      if: steps.pg-cache.outputs.cache-hit != 'true'
+      run: |
+        cd ~/postgresql
+        ./configure --prefix=$HOME/postgresql/inst --enable-debug --enable-cassert --enable-depend
+        make -j$(nproc)
+        make install
+
+    - name: Add PostgreSQL to PATH
+      run: |
+        echo "$HOME/postgresql/inst/bin" >> $GITHUB_PATH
+        echo "PG_CONFIG=$HOME/postgresql/inst/bin/pg_config" >> $GITHUB_ENV
+
+    - name: Build and install extension
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        make USE_PGXS=1 clean
+        make USE_PGXS=1
+        make USE_PGXS=1 install
+
+    - name: Cache jo-bench repository
+      uses: actions/cache@v4
+      id: jobench-cache
+      with:
+        path: ~/jo-bench
+        key: ${{ runner.os }}-jobench-${{ github.run_id }}
+        restore-keys: |
+          ${{ runner.os }}-jobench-
+
+    - name: Clone jo-bench repository
+      if: steps.jobench-cache.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 https://github.com/danolivo/jo-bench.git
+
+    - name: Update jo-bench repository
+      if: steps.jobench-cache.outputs.cache-hit == 'true'
+      run: |
+        cd ~/jo-bench
+        git pull origin main || true
+
+    - name: Initialize PostgreSQL cluster
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        initdb -D $HOME/pgdata
+
+    - name: Configure PostgreSQL with pg_track_optimizer
+      run: |
+        cat >> $HOME/pgdata/postgresql.conf <<EOF
+        shared_preload_libraries = 'pg_track_optimizer'
+        pg_track_optimizer.mode = 'forced'
+        compute_query_id = on
+        max_worker_processes = 8
+        max_parallel_workers = 8
+        max_parallel_workers_per_gather = 4
+        EOF
+
+    - name: Start PostgreSQL
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        pg_ctl -D $HOME/pgdata -l $HOME/pgdata/logfile start
+        # Wait for PostgreSQL to start
+        for i in {1..30}; do
+          if pg_isready -h localhost; then
+            break
+          fi
+          sleep 1
+        done
+        pg_isready -h localhost
+
+    - name: Create test database
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        createdb jobench
+
+    - name: Load jo-bench schema
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        psql -d jobench -f ~/jo-bench/schema.sql
+
+    - name: Create pg_track_optimizer extension
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        psql -d jobench -c "CREATE EXTENSION pg_track_optimizer;"
+
+    - name: Load jo-bench data
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        cd ~/jo-bench
+        psql -d jobench -f copy.sql
+
+    - name: Analyse tables
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        psql -d jobench -c "ANALYZE;"
+
+    - name: Reset pg_track_optimizer statistics
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        psql -d jobench -c "SELECT pg_track_optimizer_reset();"
+
+    - name: Execute jo-bench queries
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        cd ~/jo-bench/queries
+        echo "Executing queries..."
+        for query_file in *.sql; do
+          if [ -f "$query_file" ]; then
+            echo "Running: $query_file"
+            psql -d jobench -f "$query_file" > /dev/null 2>&1 || echo "Query $query_file failed"
+          fi
+        done
+        echo "All queries executed."
+
+    - name: Export pg_track_optimizer results to CSV
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        psql -d jobench -c "\COPY (SELECT * FROM pg_track_optimizer() ORDER BY avg_error DESC) TO '/tmp/pg_track_optimizer_results.csv' WITH CSV HEADER"
+        echo "Results exported to CSV:"
+        head -20 /tmp/pg_track_optimizer_results.csv
+
+    - name: Show summary statistics
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        psql -d jobench -c "
+          SELECT
+            COUNT(*) as total_queries,
+            ROUND(AVG(avg_error)::numeric, 2) as avg_error_mean,
+            ROUND(MAX(avg_error)::numeric, 2) as max_avg_error,
+            ROUND(AVG(rms_error)::numeric, 2) as rms_error_mean,
+            ROUND(AVG(twa_error)::numeric, 2) as twa_error_mean,
+            ROUND(AVG(wca_error)::numeric, 2) as wca_error_mean,
+            SUM(nexecs) as total_executions
+          FROM pg_track_optimizer();
+        "
+
+    - name: Show top 10 worst queries
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        psql -d jobench -c "
+          SELECT
+            LEFT(query, 80) as query_preview,
+            ROUND(avg_error::numeric, 2) as avg_error,
+            ROUND(rms_error::numeric, 2) as rms_error,
+            evaluated_nodes,
+            plan_nodes,
+            nexecs
+          FROM pg_track_optimizer()
+          ORDER BY avg_error DESC
+          LIMIT 10;
+        "
+
+    - name: Stop PostgreSQL
+      if: always()
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        pg_ctl -D $HOME/pgdata stop || true
+
+    - name: Upload results CSV
+      uses: actions/upload-artifact@v4
+      with:
+        name: pg_track_optimizer_jobench_results
+        path: /tmp/pg_track_optimizer_results.csv
+        retention-days: 7
+
+    - name: Upload PostgreSQL log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: postgresql_log
+        path: ~/pgdata/logfile
+        retention-days: 7
+        if-no-files-found: ignore
