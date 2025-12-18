@@ -71,13 +71,15 @@ jobs:
 
     - name: Run make check
       id: make-check
+      continue-on-error: true
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
         make USE_PGXS=1 check
 
     - name: Show regression diffs on make check failure
-      if: failure() && steps.make-check.outcome == 'failure'
+      if: steps.make-check.outcome == 'failure'
       run: |
+        echo "::error::make check failed"
         if [ -f regression.diffs ]; then
           echo "=== Regression diffs from make check ==="
           cat regression.diffs
@@ -116,25 +118,33 @@ jobs:
 
     - name: Run make installcheck
       id: make-installcheck
+      continue-on-error: true
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
         make USE_PGXS=1 installcheck
 
     - name: Show PostgreSQL log on installcheck failure
-      if: failure() && steps.make-installcheck.outcome == 'failure'
+      if: steps.make-installcheck.outcome == 'failure'
       run: |
+        echo "::error::make installcheck failed"
         if [ -f $HOME/pgdata/logfile ]; then
           echo "=== PostgreSQL log ==="
           cat $HOME/pgdata/logfile
         fi
 
     - name: Show regression diffs on installcheck failure
-      if: failure() && steps.make-installcheck.outcome == 'failure'
+      if: steps.make-installcheck.outcome == 'failure'
       run: |
         if [ -f regression.diffs ]; then
           echo "=== Regression diffs from installcheck ==="
           cat regression.diffs
         fi
+
+    - name: Fail workflow if tests failed
+      if: steps.make-check.outcome == 'failure' || steps.make-installcheck.outcome == 'failure'
+      run: |
+        echo "::error::Tests failed - see logs above for details"
+        exit 1
 
     - name: Stop PostgreSQL
       if: always()
@@ -155,6 +165,13 @@ jobs:
         if-no-files-found: ignore
         retention-days: 7
 
+    - name: Prepare failure summary
+      if: failure()
+      id: failure-summary
+      run: |
+        echo "MAKE_CHECK_STATUS=${{ steps.make-check.outcome }}" >> $GITHUB_OUTPUT
+        echo "MAKE_INSTALLCHECK_STATUS=${{ steps.make-installcheck.outcome }}" >> $GITHUB_OUTPUT
+
     - name: Send failure notification email
       if: failure()
       uses: dawidd6/action-send-mail@v3
@@ -164,16 +181,26 @@ jobs:
         secure: true
         username: ${{ secrets.EMAIL_USERNAME }}
         password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: 'PostgreSQL Master Weekly Test Failed - pg_track_optimizer'
+        subject: '❌ PostgreSQL Master Weekly Test Failed - pg_track_optimizer'
         to: lepihov@gmail.com
-        from: GitHub Actions <noreply@github.com>
+        from: GitHub Actions <github-actions@github.com>
         body: |
-          The weekly PostgreSQL master branch test for pg_track_optimizer has failed.
+          ⚠️  The weekly PostgreSQL master branch test for pg_track_optimizer has FAILED.
 
-          Workflow: ${{ github.workflow }}
-          Repository: ${{ github.repository }}
-          Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          📋 Test Results:
+          - make check: ${{ steps.make-check.outcome }}
+          - make installcheck: ${{ steps.make-installcheck.outcome }}
 
-          Please check the workflow logs for details.
+          🔗 Details:
+          - Workflow: ${{ github.workflow }}
+          - Repository: ${{ github.repository }}
+          - Branch: ${{ github.ref_name }}
+          - Commit: ${{ github.sha }}
 
-          Test artifacts are available for 7 days.
+          📊 View Full Logs:
+          ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          📦 Test artifacts (regression diffs, logs) are available for 7 days at the run URL above.
+
+          ---
+          This is an automated message from GitHub Actions.
