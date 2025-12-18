@@ -78,9 +78,9 @@ typedef struct DSMOptimizerTrackerEntry
 	double					rms_error;
 	double					twa_error;
 	double					wca_error;
-	dsa_pointer				querytext_ptr;
-	int32					assessed_nodes;
-	int32					total_nodes;
+	dsa_pointer				query_ptr;
+	int32					evaluated_nodes;
+	int32					plan_nodes;
 	double					exec_time;
 	int64					nexecs; /* Number of executions taken into account */
 } DSMOptimizerTrackerEntry;
@@ -325,8 +325,8 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	entry->rms_error = ctx->rms_error;
 	entry->twa_error = ctx->twa_error;
 	entry->wca_error = ctx->wca_error;
-	entry->assessed_nodes = ctx->nnodes;
-	entry->total_nodes = ctx->counter;
+	entry->evaluated_nodes = ctx->nnodes;
+	entry->plan_nodes = ctx->counter;
 	entry->exec_time = ctx->totaltime;
 
 	if (!found)
@@ -335,9 +335,9 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		char   *strptr;
 
 		/* Put the query string into the shared memory too */
-		entry->querytext_ptr = dsa_allocate0(htab_dsa, len + 1);
-		Assert(DsaPointerIsValid(entry->querytext_ptr));
-		strptr = (char *) dsa_get_address(htab_dsa, entry->querytext_ptr);
+		entry->query_ptr = dsa_allocate0(htab_dsa, len + 1);
+		Assert(DsaPointerIsValid(entry->query_ptr));
+		strptr = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
 		strlcpy(strptr, queryDesc->sourceText, len + 1);
 
 		entry->nexecs = 0;
@@ -528,16 +528,16 @@ to_show_data(PG_FUNCTION_ARGS)
 		values[i++] = Int64GetDatum(entry->key.queryId);
 
 		/* Query string */
-		Assert(DsaPointerIsValid(entry->querytext_ptr));
-		str = (char *) dsa_get_address(htab_dsa, entry->querytext_ptr);
+		Assert(DsaPointerIsValid(entry->query_ptr));
+		str = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
 		values[i++] = CStringGetTextDatum(str);
 
 		values[i++] = Float8GetDatum(entry->avg_error);
 		values[i++] = Float8GetDatum(entry->rms_error);
 		values[i++] = Float8GetDatum(entry->twa_error);
 		values[i++] = Float8GetDatum(entry->wca_error);
-		values[i++] = Int32GetDatum(entry->assessed_nodes);
-		values[i++] = Int32GetDatum(entry->total_nodes);
+		values[i++] = Int32GetDatum(entry->evaluated_nodes);
+		values[i++] = Int32GetDatum(entry->plan_nodes);
 		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
 		values[i++] = Int64GetDatum(entry->nexecs);
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
@@ -576,8 +576,8 @@ to_reset(PG_FUNCTION_ARGS)
 			   OidIsValid(entry->key.dbOid));
 
 		/* At first, free memory, allocated for the query text */
-		Assert(DsaPointerIsValid(entry->querytext_ptr));
-		dsa_free(htab_dsa, entry->querytext_ptr);
+		Assert(DsaPointerIsValid(entry->query_ptr));
+		dsa_free(htab_dsa, entry->query_ptr);
 
 		dshash_delete_current(&stat);
 		pre = pg_atomic_fetch_sub_u32(&shared->htab_counter, 1);
@@ -616,18 +616,18 @@ static const DSMOptimizerTrackerEntry EOFEntry = {
 											.rms_error = -2.,
 											.twa_error = -2.,
 											.wca_error = -2.,
-											.querytext_ptr = 0,
-											.assessed_nodes = -1,
-											.total_nodes = -1,
+											.query_ptr = 0,
+											.evaluated_nodes = -1,
+											.plan_nodes = -1,
 											.exec_time = -1.,
 											.nexecs = -1
 											};
 #define IsEOFEntry(entry) ( \
 	(entry)->key.dbOid == EOFEntry.key.dbOid && \
 	(entry)->key.queryId == EOFEntry.key.queryId && \
-	(entry)->querytext_ptr == EOFEntry.querytext_ptr && \
-	(entry)->assessed_nodes == EOFEntry.assessed_nodes && \
-	(entry)->total_nodes == EOFEntry.total_nodes && \
+	(entry)->query_ptr == EOFEntry.query_ptr && \
+	(entry)->evaluated_nodes == EOFEntry.evaluated_nodes && \
+	(entry)->plan_nodes == EOFEntry.plan_nodes && \
 	(entry)->nexecs == EOFEntry.nexecs \
 )
 
@@ -669,9 +669,9 @@ _flush_hash_table(void)
 
 		Assert(entry->key.queryId != UINT64CONST(0) &&
 			   OidIsValid(entry->key.dbOid) &&
-			   DsaPointerIsValid(entry->querytext_ptr));
+			   DsaPointerIsValid(entry->query_ptr));
 
-		str = (char *) dsa_get_address(htab_dsa, entry->querytext_ptr);
+		str = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
 		len = strlen(str);
 
 		/*
@@ -787,9 +787,9 @@ _load_hash_table(TODSMRegistry *state)
 		/* Load query string */
 		if (fread(&len, sizeof(uint32), 1, file) != 1)
 			goto read_error;
-		disk_entry.querytext_ptr = dsa_allocate0(htab_dsa, len + 1);
-		Assert(DsaPointerIsValid(disk_entry.querytext_ptr));
-		str = (char *) dsa_get_address(htab_dsa, disk_entry.querytext_ptr);
+		disk_entry.query_ptr = dsa_allocate0(htab_dsa, len + 1);
+		Assert(DsaPointerIsValid(disk_entry.query_ptr));
+		str = (char *) dsa_get_address(htab_dsa, disk_entry.query_ptr);
 		if (fread(str, len, 1, file) != 1)
 			goto read_error;
 
@@ -808,11 +808,11 @@ _load_hash_table(TODSMRegistry *state)
 		entry->rms_error = disk_entry.rms_error;
 		entry->twa_error = disk_entry.twa_error;
 		entry->wca_error = disk_entry.wca_error;
-		entry->assessed_nodes = disk_entry.assessed_nodes;
-		entry->total_nodes = disk_entry.total_nodes;
+		entry->evaluated_nodes = disk_entry.evaluated_nodes;
+		entry->plan_nodes = disk_entry.plan_nodes;
 		entry->exec_time = disk_entry.exec_time;
 		entry->nexecs = disk_entry.nexecs;
-		entry->querytext_ptr = disk_entry.querytext_ptr;
+		entry->query_ptr = disk_entry.query_ptr;
 
 		dshash_release_lock(htab, entry);
 		counter++;

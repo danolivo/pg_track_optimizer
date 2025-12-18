@@ -5,13 +5,13 @@
 CREATE FUNCTION pg_track_optimizer(
 	OUT dboid			Oid,
 	OUT queryid			bigint,
-	OUT querytext       text,
+	OUT query           text,
 	OUT avg_error		float8,
 	OUT rms_error		float8,
 	OUT twa_error		float8,
 	OUT wca_error		float8,
-	OUT nodes_assessed  integer,
-	OUT nodes_total     integer,
+	OUT evaluated_nodes integer,
+	OUT plan_nodes      integer,
 	OUT exec_time       float8,
 	OUT nexecs          bigint
 )

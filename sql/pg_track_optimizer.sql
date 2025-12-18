@@ -10,22 +10,22 @@ CREATE TABLE pto_test(x integer, y integer, z integer);
 ANALYZE pto_test;
 
 EXPLAIN (COSTS OFF) SELECT * FROM pto_test WHERE x < 1;
-SELECT querytext,avg_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs
+SELECT query,avg_error>=0,evaluated_nodes,plan_nodes,exec_time>0,nexecs
 FROM pg_track_optimizer()
-ORDER BY querytext COLLATE "C"; -- Nothing to track for plain explain.
+ORDER BY query COLLATE "C"; -- Nothing to track for plain explain.
 
 EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
 SELECT * FROM pto_test WHERE x < 1;
-SELECT querytext,avg_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs
+SELECT query,avg_error>=0,evaluated_nodes,plan_nodes,exec_time>0,nexecs
 FROM pg_track_optimizer()
-ORDER BY querytext; -- Must see it.
+ORDER BY query; -- Must see it.
 -- TODO: Disable storing of queries, involving the extension UI objects
 
 SELECT * FROM pto_test WHERE x < 1;
 -- Must see second execution of the query in nexecs (don't mind EXPLAIN)
-SELECT querytext,avg_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs
+SELECT query,avg_error>=0,evaluated_nodes,plan_nodes,exec_time>0,nexecs
 FROM pg_track_optimizer()
-ORDER BY querytext;
+ORDER BY query;
 
 /*
  * Tests for parallel workers.
@@ -47,8 +47,8 @@ SET pg_track_optimizer.mode = 'forced';
 EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)
 SELECT * FROM t1;
 
-SELECT querytext,avg_error,rms_error,nodes_assessed,nodes_total,nexecs
-FROM pg_track_optimizer() WHERE querytext LIKE '%FROM t1%';
+SELECT query,avg_error,rms_error,evaluated_nodes,plan_nodes,nexecs
+FROM pg_track_optimizer() WHERE query LIKE '%FROM t1%';
 
 /*
  * IndexOnlyScan may fetch dead tuples and recheck their state in the heap.
@@ -80,7 +80,7 @@ SELECT val FROM verify_test;
 -- a more understandable manner.
 -- So, make this test helpful in the future ...
 SELECT
-  querytext,nodes_assessed,nodes_total,nexecs
-FROM pg_track_optimizer() WHERE querytext LIKE '%FROM verify_test%';
+  query,evaluated_nodes,plan_nodes,nexecs
+FROM pg_track_optimizer() WHERE query LIKE '%FROM verify_test%';
 
 DROP EXTENSION pg_track_optimizer;
