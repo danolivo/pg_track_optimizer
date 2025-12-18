@@ -158,7 +158,10 @@ jobs:
         for query_file in *.sql; do
           if [ -f "$query_file" ]; then
             echo "Running: $query_file"
-            psql -d jobench -v datadir="'$HOME/jo-bench'" -f "$query_file" > /dev/null 2>&1 || echo "Query $query_file failed"
+            # Add filename comment before query and execute
+            (echo "/* $query_file */"; cat "$query_file") | \
+              psql -d jobench -v datadir="'$HOME/jo-bench'" > /dev/null 2>&1 || \
+              echo "Query $query_file failed"
           fi
         done
         echo "All queries executed."
