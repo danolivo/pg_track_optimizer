@@ -232,8 +232,9 @@ jobs:
           ORDER BY queryid;
         " > /tmp/benchmark_results.txt
 
-        # Save script path before changing directories
+        # Save script path and extension commit before changing directories
         SCRIPT_PATH="$(pwd)/.github/scripts/generate-wiki-page.sh"
+        EXT_COMMIT=$(git rev-parse HEAD)
         chmod +x "$SCRIPT_PATH"
 
         # Clone wiki repository with authentication
@@ -244,7 +245,7 @@ jobs:
         }
 
         # Run wiki page generation script
-        "$SCRIPT_PATH" /tmp/benchmark_results.txt ~/wiki || {
+        "$SCRIPT_PATH" /tmp/benchmark_results.txt ~/wiki "$EXT_COMMIT" || {
           echo "Failed to generate wiki page."
           exit 0
         }
