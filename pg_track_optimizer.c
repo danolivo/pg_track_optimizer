@@ -327,7 +327,6 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	entry->wca_error = ctx->wca_error;
 	entry->evaluated_nodes = ctx->nnodes;
 	entry->plan_nodes = ctx->counter;
-	entry->exec_time = ctx->totaltime;
 
 	if (!found)
 	{
@@ -340,10 +339,13 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		strptr = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
 		strlcpy(strptr, queryDesc->sourceText, len + 1);
 
+		entry->exec_time = 0.0;
 		entry->nexecs = 0;
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
 	}
 
+	/* Accumulate total execution time across all executions */
+	entry->exec_time += ctx->totaltime;
 	entry->nexecs++;
 
 	dshash_release_lock(htab, entry);
