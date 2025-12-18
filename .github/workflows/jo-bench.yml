@@ -232,6 +232,10 @@ jobs:
           ORDER BY queryid;
         " > /tmp/benchmark_results.txt
 
+        # Save script path before changing directories
+        SCRIPT_PATH="$(pwd)/.github/scripts/generate-wiki-page.sh"
+        chmod +x "$SCRIPT_PATH"
+
         # Clone wiki repository with authentication
         cd ~
         git clone https://x-access-token:${GH_TOKEN}@github.com/danolivo/pg_track_optimizer.wiki.git wiki || {
@@ -240,8 +244,7 @@ jobs:
         }
 
         # Run wiki page generation script
-        chmod +x .github/scripts/generate-wiki-page.sh
-        .github/scripts/generate-wiki-page.sh /tmp/benchmark_results.txt ~/wiki || {
+        "$SCRIPT_PATH" /tmp/benchmark_results.txt ~/wiki || {
           echo "Failed to generate wiki page."
           exit 0
         }
