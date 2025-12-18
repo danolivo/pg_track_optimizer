@@ -111,13 +111,13 @@ SET pg_track_optimizer.hash_mem = 10240;
 
 ```sql
 SELECT
-    querytext,
+    query,
     avg_error,
     rms_error,
     twa_error,
     wca_error,
-    nodes_assessed,
-    nodes_total,
+    evaluated_nodes,
+    plan_nodes,
     exec_time,
     nexecs
 FROM pg_track_optimizer()
@@ -127,21 +127,21 @@ LIMIT 10;
 
 **Example output:**
 ```
-                    querytext                     | avg_error | rms_error | twa_error | wca_error | nodes_assessed | nexecs
---------------------------------------------------+-----------+-----------+-----------+-----------+----------------+--------
- SELECT * FROM orders WHERE customer_id = $1      |      4.23 |      4.89 |      4.56 |      3.87 |              5 |    142
- SELECT COUNT(*) FROM products WHERE category...  |      3.87 |      4.12 |      3.95 |      4.21 |              3 |     23
+                    query                         | avg_error | rms_error | twa_error | wca_error | evaluated_nodes | nexecs
+--------------------------------------------------+-----------+-----------+-----------+-----------+-----------------+--------
+ SELECT * FROM orders WHERE customer_id = $1      |      4.23 |      4.89 |      4.56 |      3.87 |               5 |    142
+ SELECT COUNT(*) FROM products WHERE category...  |      3.87 |      4.12 |      3.95 |      4.21 |               3 |     23
 ```
 
 ### Column Descriptions
 
-- **querytext**: The SQL query (normalised, with literals replaced by `$1`, `$2`, etc.)
+- **query**: The SQL query (normalised, with literals replaced by `$1`, `$2`, etc.)
 - **avg_error**: Simple average of log-scale errors across plan nodes
 - **rms_error**: Root Mean Square (RMS) error - emphasises large estimation errors
 - **twa_error**: Time-Weighted Average (TWA) error - highlights estimation errors in time-consuming nodes
 - **wca_error**: Cost-Weighted Average (WCA) error - highlights estimation errors in nodes the planner considered expensive
-- **nodes_assessed**: Number of plan nodes analysed
-- **nodes_total**: Total plan nodes (some may be skipped, e.g., never-executed branches)
+- **evaluated_nodes**: Number of plan nodes analysed
+- **plan_nodes**: Total plan nodes (some may be skipped, e.g., never-executed branches)
 - **exec_time**: Total execution time across all executions (milliseconds)
 - **nexecs**: Number of times the query was executed
 
@@ -198,7 +198,7 @@ The extension will automatically track queries exceeding the error threshold. Pr
 ### 3. Review Worst Offenders
 ```sql
 SELECT
-    querytext,
+    query,
     avg_error,
     nexecs,
     exec_time / nexecs AS avg_time_ms

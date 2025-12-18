@@ -45,15 +45,15 @@ JOIN join_inner ON join_outer.id = join_inner.id
 WHERE join_outer.val + join_inner.val > 5;
 
 -- Check that we tracked the query
--- The nodes_assessed should include the join node with filtered tuples
+-- The evaluated_nodes should include the join node with filtered tuples
 SELECT
-  querytext,
+  query,
   ROUND(avg_error::numeric,1) AS error,
-  nodes_assessed,
-  nodes_total,
+  evaluated_nodes,
+  plan_nodes,
   nexecs
 FROM pg_track_optimizer()
-WHERE querytext LIKE '%FROM join_outer%';
+WHERE query LIKE '%FROM join_outer%';
 
 -- Cleanup
 RESET enable_hashjoin;
