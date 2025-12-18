@@ -27,7 +27,6 @@ prediction_walker(PlanState *pstate, void *context)
 	double					nloops;
 	int						tmp_counter;
 	double					relative_time;
-	double					relative_cost;
 	double					node_error;
 
 	/* At first, increment the counter */
@@ -187,12 +186,16 @@ prediction_walker(PlanState *pstate, void *context)
 									pstate->instrument->nloops / ctx->totaltime;
 	ctx->twa_error += node_error * relative_time;
 
-	/* Accumulate total cost for later normalisation */
-	ctx->totalcost += pstate->plan->total_cost;
-	relative_cost = pstate->plan->total_cost;
-	ctx->wca_error += node_error * relative_cost;
-	ctx->nnodes++;
+	/* Don't forget about very rare potential case of zero cost */
+	if (ctx->totalcost > 0.)
+	{
+		double	relative_cost;
 
+		relative_cost = pstate->plan->total_cost / ctx->totalcost;
+		ctx->wca_error += node_error * relative_cost;
+	}
+
+	ctx->nnodes++;
 	return false;
 }
 
@@ -204,18 +207,20 @@ prediction_walker(PlanState *pstate, void *context)
  * the estimated error that is proved as helpful in many cases.
  */
 double
-plan_error(PlanState *pstate, double totaltime, PlanEstimatorContext *ctx)
+plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 {
+	PlanState  *pstate = queryDesc->planstate;
+
 	ctx->avg_error = 0.;
 	ctx->rms_error = 0.;
 	ctx->twa_error = 0.;
-	ctx->totalcost = 0.;
 	ctx->wca_error = 0.;
-	ctx->totaltime = totaltime;
+	ctx->totaltime = queryDesc->totaltime->total;
+	ctx->totalcost = queryDesc->plannedstmt->planTree->total_cost;
 	ctx->nnodes = 0;
 	ctx->counter = 0;
 
-	Assert(totaltime > 0.);
+	Assert(ctx->totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);
 
 	/* Finally, average on the number of nodes */
@@ -224,9 +229,7 @@ plan_error(PlanState *pstate, double totaltime, PlanEstimatorContext *ctx)
 		ctx->avg_error /= ctx->nnodes;
 		ctx->rms_error = sqrt(ctx->rms_error / ctx->nnodes);
 		ctx->twa_error /= ctx->nnodes;
-		/* Normalise cost-weighted error by total cost */
-		if (ctx->totalcost > 0.)
-			ctx->wca_error /= ctx->totalcost;
+		ctx->wca_error /= ctx->nnodes;
 	}
 	else
 		/* No nodes considered - no estimation can be made. */

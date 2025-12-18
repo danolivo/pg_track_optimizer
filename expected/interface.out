@@ -9,6 +9,7 @@ CREATE EXTENSION pg_track_optimizer;
  avg_error      | double precision |           |          | 
  rms_error      | double precision |           |          | 
  twa_error      | double precision |           |          | 
+ wca_error      | double precision |           |          | 
  nodes_assessed | integer          |           |          | 
  nodes_total    | integer          |           |          | 
  exec_time      | double precision |           |          | 

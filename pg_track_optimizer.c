@@ -387,9 +387,7 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	 */
 	InstrEndLoop(queryDesc->totaltime);
 
-	normalized_error = plan_error(queryDesc->planstate,
-							      queryDesc->totaltime->total,
-								  &ctx);
+	normalized_error = plan_error(queryDesc, &ctx);
 
 	/*
 	 * Store data in the hash table and/or print it to the log. Decision on what
