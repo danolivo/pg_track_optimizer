@@ -111,6 +111,7 @@ SET pg_track_optimizer.hash_mem = 10240;
 
 ```sql
 SELECT
+    queryid,
     query,
     avg_error,
     rms_error,
@@ -119,7 +120,8 @@ SELECT
     evaluated_nodes,
     plan_nodes,
     exec_time,
-    nexecs
+    nexecs,
+    blks_accessed
 FROM pg_track_optimizer()
 ORDER BY avg_error DESC
 LIMIT 10;
@@ -127,14 +129,15 @@ LIMIT 10;
 
 **Example output:**
 ```
-                    query                         | avg_error | rms_error | twa_error | wca_error | evaluated_nodes | nexecs
---------------------------------------------------+-----------+-----------+-----------+-----------+-----------------+--------
- SELECT * FROM orders WHERE customer_id = $1      |      4.23 |      4.89 |      4.56 |      3.87 |               5 |    142
- SELECT COUNT(*) FROM products WHERE category...  |      3.87 |      4.12 |      3.95 |      4.21 |               3 |     23
+   queryid   |                    query                         | avg_error | rms_error | twa_error | wca_error | evaluated_nodes | plan_nodes | exec_time | nexecs | blks_accessed
+-------------+--------------------------------------------------+-----------+-----------+-----------+-----------+-----------------+------------+-----------+--------+---------------
+ 42387612345 | SELECT * FROM orders WHERE customer_id = $1      |      4.23 |      4.89 |      4.56 |      3.87 |               5 |          7 |   1523.45 |    142 |         28456
+ 98765432109 | SELECT COUNT(*) FROM products WHERE category...  |      3.87 |      4.12 |      3.95 |      4.21 |               3 |          4 |    234.12 |     23 |          5632
 ```
 
 ### Column Descriptions
 
+- **queryid**: Internal PostgreSQL query identifier (same as in pg_stat_statements)
 - **query**: The SQL query (normalised, with literals replaced by `$1`, `$2`, etc.)
 - **avg_error**: Simple average of log-scale errors across plan nodes
 - **rms_error**: Root Mean Square (RMS) error - emphasises large estimation errors
@@ -145,6 +148,8 @@ LIMIT 10;
 - **exec_time**: Total execution time across all executions (milliseconds). Divide by `nexecs` to get average per execution
 - **nexecs**: Number of times the query was executed
 - **blks_accessed**: Total number of blocks accessed (sum of shared, local, and temporary blocks hit, read, and written) across all executions
+
+> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, and `blks_accessed` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
 
 ### Managing Statistics
 
