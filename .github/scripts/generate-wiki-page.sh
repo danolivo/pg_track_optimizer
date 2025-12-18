@@ -2,13 +2,14 @@
 set -e
 
 # Script to generate wiki page with JO-Bench results
-# Usage: generate-wiki-page.sh <results_file> <wiki_dir>
+# Usage: generate-wiki-page.sh <results_file> <wiki_dir> <ext_commit>
 
 RESULTS_FILE="$1"
 WIKI_DIR="$2"
+EXT_COMMIT="$3"
 
-if [ -z "$RESULTS_FILE" ] || [ -z "$WIKI_DIR" ]; then
-  echo "Usage: $0 <results_file> <wiki_dir>"
+if [ -z "$RESULTS_FILE" ] || [ -z "$WIKI_DIR" ] || [ -z "$EXT_COMMIT" ]; then
+  echo "Usage: $0 <results_file> <wiki_dir> <ext_commit>"
   exit 1
 fi
 
@@ -21,7 +22,6 @@ fi
 TEST_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
 PG_VERSION=$(psql -d jobench -t -c "SELECT version();" | head -1 | xargs)
 PG_COMMIT=$(cd ~/postgresql && git rev-parse HEAD)
-EXT_COMMIT=$(git rev-parse HEAD)
 
 # Read benchmark results
 BENCHMARK_RESULTS=$(cat "$RESULTS_FILE")
