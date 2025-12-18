@@ -22,13 +22,13 @@ EXPLAIN (COSTS OFF) SELECT * FROM pto_test WHERE x < 1;
    Filter: (x < 1)
 (2 rows)
 
-SELECT querytext,avg_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs
+SELECT query,avg_error>=0,evaluated_nodes,plan_nodes,exec_time>0,nexecs
 FROM pg_track_optimizer()
-ORDER BY querytext COLLATE "C"; -- Nothing to track for plain explain.
-                 querytext                 | ?column? | nodes_assessed | nodes_total | ?column? | nexecs 
--------------------------------------------+----------+----------------+-------------+----------+--------
- SELECT * FROM pg_track_optimizer_flush(); | t        |              1 |           1 | t        |      1
- SELECT * FROM pg_track_optimizer_reset(); | t        |              1 |           1 | t        |      1
+ORDER BY query COLLATE "C"; -- Nothing to track for plain explain.
+                   query                   | ?column? | evaluated_nodes | plan_nodes | ?column? | nexecs 
+-------------------------------------------+----------+-----------------+------------+----------+--------
+ SELECT * FROM pg_track_optimizer_flush(); | t        |               1 |          1 | t        |      1
+ SELECT * FROM pg_track_optimizer_reset(); | t        |               1 |          1 | t        |      1
 (2 rows)
 
 EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
@@ -39,18 +39,18 @@ SELECT * FROM pto_test WHERE x < 1;
    Filter: (x < 1)
 (2 rows)
 
-SELECT querytext,avg_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs
+SELECT query,avg_error>=0,evaluated_nodes,plan_nodes,exec_time>0,nexecs
 FROM pg_track_optimizer()
-ORDER BY querytext; -- Must see it.
-                                  querytext                                  | ?column? | nodes_assessed | nodes_total | ?column? | nexecs 
------------------------------------------------------------------------------+----------+----------------+-------------+----------+--------
- EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)                      +| t        |              1 |           1 | t        |      1
- SELECT * FROM pto_test WHERE x < 1;                                         |          |                |             |          | 
- SELECT * FROM pg_track_optimizer_flush();                                   | t        |              1 |           1 | t        |      1
- SELECT * FROM pg_track_optimizer_reset();                                   | t        |              1 |           1 | t        |      1
- SELECT querytext,avg_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs+| t        |              2 |           2 | t        |      1
- FROM pg_track_optimizer()                                                  +|          |                |             |          | 
- ORDER BY querytext COLLATE "C";                                             |          |                |             |          | 
+ORDER BY query; -- Must see it.
+                                  query                                  | ?column? | evaluated_nodes | plan_nodes | ?column? | nexecs 
+-------------------------------------------------------------------------+----------+-----------------+------------+----------+--------
+ EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)                  +| t        |               1 |          1 | t        |      1
+ SELECT * FROM pto_test WHERE x < 1;                                     |          |                 |            |          | 
+ SELECT * FROM pg_track_optimizer_flush();                               | t        |               1 |          1 | t        |      1
+ SELECT * FROM pg_track_optimizer_reset();                               | t        |               1 |          1 | t        |      1
+ SELECT query,avg_error>=0,evaluated_nodes,plan_nodes,exec_time>0,nexecs+| t        |               2 |          2 | t        |      1
+ FROM pg_track_optimizer()                                              +|          |                 |            |          | 
+ ORDER BY query COLLATE "C";                                             |          |                 |            |          | 
 (4 rows)
 
 -- TODO: Disable storing of queries, involving the extension UI objects
@@ -60,21 +60,21 @@ SELECT * FROM pto_test WHERE x < 1;
 (0 rows)
 
 -- Must see second execution of the query in nexecs (don't mind EXPLAIN)
-SELECT querytext,avg_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs
+SELECT query,avg_error>=0,evaluated_nodes,plan_nodes,exec_time>0,nexecs
 FROM pg_track_optimizer()
-ORDER BY querytext;
-                                  querytext                                  | ?column? | nodes_assessed | nodes_total | ?column? | nexecs 
------------------------------------------------------------------------------+----------+----------------+-------------+----------+--------
- EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)                      +| t        |              1 |           1 | t        |      2
- SELECT * FROM pto_test WHERE x < 1;                                         |          |                |             |          | 
- SELECT * FROM pg_track_optimizer_flush();                                   | t        |              1 |           1 | t        |      1
- SELECT * FROM pg_track_optimizer_reset();                                   | t        |              1 |           1 | t        |      1
- SELECT querytext,avg_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs+| t        |              2 |           2 | t        |      1
- FROM pg_track_optimizer()                                                  +|          |                |             |          | 
- ORDER BY querytext COLLATE "C";                                             |          |                |             |          | 
- SELECT querytext,avg_error>=0,nodes_assessed,nodes_total,exec_time>0,nexecs+| t        |              2 |           2 | t        |      1
- FROM pg_track_optimizer()                                                  +|          |                |             |          | 
- ORDER BY querytext;                                                         |          |                |             |          | 
+ORDER BY query;
+                                  query                                  | ?column? | evaluated_nodes | plan_nodes | ?column? | nexecs 
+-------------------------------------------------------------------------+----------+-----------------+------------+----------+--------
+ EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)                  +| t        |               1 |          1 | t        |      2
+ SELECT * FROM pto_test WHERE x < 1;                                     |          |                 |            |          | 
+ SELECT * FROM pg_track_optimizer_flush();                               | t        |               1 |          1 | t        |      1
+ SELECT * FROM pg_track_optimizer_reset();                               | t        |               1 |          1 | t        |      1
+ SELECT query,avg_error>=0,evaluated_nodes,plan_nodes,exec_time>0,nexecs+| t        |               2 |          2 | t        |      1
+ FROM pg_track_optimizer()                                              +|          |                 |            |          | 
+ ORDER BY query COLLATE "C";                                             |          |                 |            |          | 
+ SELECT query,avg_error>=0,evaluated_nodes,plan_nodes,exec_time>0,nexecs+| t        |               2 |          2 | t        |      1
+ FROM pg_track_optimizer()                                              +|          |                 |            |          | 
+ ORDER BY query;                                                         |          |                 |            |          | 
 (5 rows)
 
 /*
@@ -100,12 +100,12 @@ SELECT * FROM t1;
    ->  Parallel Seq Scan on t1 (actual rows=20000 loops=5)
 (4 rows)
 
-SELECT querytext,avg_error,rms_error,nodes_assessed,nodes_total,nexecs
-FROM pg_track_optimizer() WHERE querytext LIKE '%FROM t1%';
-                             querytext                              | avg_error | rms_error | nodes_assessed | nodes_total | nexecs 
---------------------------------------------------------------------+-----------+-----------+----------------+-------------+--------
- EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)+|         0 |         0 |              2 |           2 |      1
- SELECT * FROM t1;                                                  |           |           |                |             | 
+SELECT query,avg_error,rms_error,evaluated_nodes,plan_nodes,nexecs
+FROM pg_track_optimizer() WHERE query LIKE '%FROM t1%';
+                               query                                | avg_error | rms_error | evaluated_nodes | plan_nodes | nexecs 
+--------------------------------------------------------------------+-----------+-----------+-----------------+------------+--------
+ EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)+|         0 |         0 |               2 |          2 |      1
+ SELECT * FROM t1;                                                  |           |           |                 |            | 
 (1 row)
 
 /*
@@ -142,12 +142,12 @@ SELECT val FROM verify_test;
 -- a more understandable manner.
 -- So, make this test helpful in the future ...
 SELECT
-  querytext,nodes_assessed,nodes_total,nexecs
-FROM pg_track_optimizer() WHERE querytext LIKE '%FROM verify_test%';
-                             querytext                              | nodes_assessed | nodes_total | nexecs 
---------------------------------------------------------------------+----------------+-------------+--------
- EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)+|              2 |           2 |      1
- SELECT val FROM verify_test;                                       |                |             | 
+  query,evaluated_nodes,plan_nodes,nexecs
+FROM pg_track_optimizer() WHERE query LIKE '%FROM verify_test%';
+                               query                                | evaluated_nodes | plan_nodes | nexecs 
+--------------------------------------------------------------------+-----------------+------------+--------
+ EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)+|               2 |          2 |      1
+ SELECT val FROM verify_test;                                       |                 |            | 
 (1 row)
 
 DROP EXTENSION pg_track_optimizer;
