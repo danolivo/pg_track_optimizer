@@ -3,7 +3,6 @@ CREATE EXTENSION pg_track_optimizer;
                   View "public.pg_track_optimizer"
      Column      |       Type       | Collation | Nullable | Default 
 -----------------+------------------+-----------+----------+---------
- dboid           | oid              |           |          | 
  queryid         | bigint           |           |          | 
  query           | text             |           |          | 
  avg_error       | double precision |           |          | 
