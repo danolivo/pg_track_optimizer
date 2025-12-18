@@ -203,6 +203,8 @@ jobs:
 
     - name: Generate wiki page with benchmark results
       if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
 
@@ -237,11 +239,20 @@ jobs:
           ORDER BY queryid;
         " > /tmp/benchmark_results.txt
 
-        # Create wiki directory if it doesn't exist
-        mkdir -p wiki
+        # Clone wiki repository with authentication
+        cd ~
+        git clone https://x-access-token:${GH_TOKEN}@github.com/danolivo/pg_track_optimizer.wiki.git wiki || {
+          echo "Failed to clone wiki repository. Skipping wiki update."
+          exit 0
+        }
+        cd wiki
+
+        # Configure git
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
 
         # Create wiki page filename with date
-        WIKI_PAGE="wiki/JO-Bench-Results-$(date -u '+%Y-%m-%d-%H%M%S').md"
+        WIKI_PAGE="JO-Bench-Results-$(date -u '+%Y-%m-%d-%H%M%S').md"
 
         # Create wiki page content
         cat > "$WIKI_PAGE" <<'EOF'
@@ -283,19 +294,45 @@ EOF
         sed -i "s|\${EXT_COMMIT:0:7}|${EXT_COMMIT:0:7}|g" "$WIKI_PAGE"
         sed -i "s|\${EXT_COMMIT}|${EXT_COMMIT}|g" "$WIKI_PAGE"
 
-        # Configure git
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
+        # Update Home page with link to new results
+        WIKI_PAGE_NAME=$(basename "$WIKI_PAGE" .md)
 
-        # Commit and push
-        git add "$WIKI_PAGE"
+        if [ ! -f "Home.md" ]; then
+          # Create Home page if it doesn't exist
+          cat > Home.md <<'HOMEEOF'
+# pg_track_optimizer Wiki
+
+Welcome to the pg_track_optimizer wiki!
+
+## JO-Bench Performance Test Results
+
+HOMEEOF
+        fi
+
+        # Add link to the new report at the beginning of the results section
+        if grep -q "## JO-Bench Performance Test Results" Home.md; then
+          # Insert link after the header
+          sed -i "/## JO-Bench Performance Test Results/a\\- [${TEST_DATE}](${WIKI_PAGE_NAME})" Home.md
+        else
+          # Append section if it doesn't exist
+          cat >> Home.md <<HOMEEOF
+
+## JO-Bench Performance Test Results
+
+- [${TEST_DATE}](${WIKI_PAGE_NAME})
+HOMEEOF
+        fi
+
+        # Commit and push to wiki repository
+        git add "$WIKI_PAGE" Home.md
         git commit -m "Add JO-Bench results for ${TEST_DATE}"
-        git push || {
+        git push origin master || {
           echo "Failed to push wiki page. This might be due to permissions."
           exit 0
         }
 
         echo "Wiki page created: $WIKI_PAGE"
+        echo "Home page updated with link to new results"
 
     - name: Stop PostgreSQL
       if: always()
