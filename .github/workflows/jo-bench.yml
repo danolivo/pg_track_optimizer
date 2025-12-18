@@ -202,7 +202,6 @@ jobs:
         "
 
     - name: Generate wiki page with benchmark results
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       env:
         GH_TOKEN: ${{ secrets.WIKI_TOKEN }}
       run: |
