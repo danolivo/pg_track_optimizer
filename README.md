@@ -24,10 +24,11 @@ For each plan node, it calculates the relative error using logarithmic scale:
 error = |log(actual_rows / estimated_rows)|
 ```
 
-Three error metrics are computed:
+Four error metrics are computed:
 - **avg_error**: Simple average across all plan nodes
 - **rms_error**: Root Mean Square (RMS) - emphasises large errors
 - **twa_error**: Time-Weighted Average (TWA) - highlights errors in time-consuming nodes
+- **wca_error**: Cost-Weighted Average (WCA) - highlights errors in high-cost nodes according to the planner
 
 Queries with high error values are candidates for investigation: missing indexes, outdated statistics, or planner limitations.
 
@@ -114,6 +115,7 @@ SELECT
     avg_error,
     rms_error,
     twa_error,
+    wca_error,
     nodes_assessed,
     nodes_total,
     exec_time,
@@ -125,18 +127,19 @@ LIMIT 10;
 
 **Example output:**
 ```
-                    querytext                     | avg_error | rms_error | twa_error | nodes_assessed | nexecs
---------------------------------------------------+------------+-----------+------------+----------------+--------
- SELECT * FROM orders WHERE customer_id = $1      |       4.23 |      4.89 |       4.56 |              5 |    142
- SELECT COUNT(*) FROM products WHERE category...  |       3.87 |      4.12 |       3.95 |              3 |     23
+                    querytext                     | avg_error | rms_error | twa_error | wca_error | nodes_assessed | nexecs
+--------------------------------------------------+-----------+-----------+-----------+-----------+----------------+--------
+ SELECT * FROM orders WHERE customer_id = $1      |      4.23 |      4.89 |      4.56 |      3.87 |              5 |    142
+ SELECT COUNT(*) FROM products WHERE category...  |      3.87 |      4.12 |      3.95 |      4.21 |              3 |     23
 ```
 
 ### Column Descriptions
 
-- **querytext**: The SQL query (normalized, with literals replaced by `$1`, `$2`, etc.)
+- **querytext**: The SQL query (normalised, with literals replaced by `$1`, `$2`, etc.)
 - **avg_error**: Simple average of log-scale errors across plan nodes
 - **rms_error**: Root Mean Square (RMS) error - emphasises large estimation errors
 - **twa_error**: Time-Weighted Average (TWA) error - highlights estimation errors in time-consuming nodes
+- **wca_error**: Cost-Weighted Average (WCA) error - highlights estimation errors in nodes the planner considered expensive
 - **nodes_assessed**: Number of plan nodes analysed
 - **nodes_total**: Total plan nodes (some may be skipped, e.g., never-executed branches)
 - **exec_time**: Total execution time across all executions (milliseconds)
@@ -173,6 +176,12 @@ Shows that estimation errors occurred in the most time-consuming parts of the pl
 - **Sequential scans with wrong row estimates**: Should have used an index
 - **Nested loops with underestimated inner rows**: Should have used hash join
 - **Sorts with wrong cardinality**: Allocated insufficient work_mem
+
+### High `wca_error`
+Indicates estimation errors in nodes the planner considered expensive. This can reveal:
+- **Misalignment between cost model and reality**: Planner's cost estimates don't match actual execution patterns
+- **Index vs sequential scan decisions**: Wrong cost estimates led to poor access method choices
+- **Join method selection**: Planner overestimated cost of certain join types
 
 ## Example Workflow
 
