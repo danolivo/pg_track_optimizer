@@ -13,7 +13,8 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT evaluated_nodes integer,
 	OUT plan_nodes      integer,
 	OUT exec_time       float8,
-	OUT nexecs          bigint
+	OUT nexecs          bigint,
+	OUT blks_accessed   bigint
 )
 RETURNS setof record
 AS 'MODULE_PATHNAME', 'to_show_data'
@@ -21,7 +22,8 @@ LANGUAGE C STRICT VOLATILE;
 
 CREATE VIEW pg_track_optimizer AS SELECT
   t.queryid, t.query, t.avg_error, t.rms_error, t.twa_error,
-  t.wca_error, t.evaluated_nodes, t.plan_nodes, t.exec_time, t.nexecs
+  t.wca_error, t.evaluated_nodes, t.plan_nodes, t.exec_time, t.nexecs,
+  t.blks_accessed
 FROM pg_track_optimizer() t, pg_database d
 WHERE t.dboid = d.oid AND datname = current_database();
 COMMENT ON VIEW pg_track_optimizer IS 'query tracking data for current database';
