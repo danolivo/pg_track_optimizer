@@ -3,6 +3,8 @@ name: JO-Bench Performance Testing
 on:
   push:
     branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   jo-bench:
@@ -71,17 +73,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-jobench-
 
-    - name: Clone jo-bench repository
-      if: steps.jobench-cache.outputs.cache-hit != 'true'
+    - name: Setup jo-bench repository
       run: |
         cd ~
-        git clone --depth 1 https://github.com/danolivo/jo-bench.git
-
-    - name: Update jo-bench repository
-      if: steps.jobench-cache.outputs.cache-hit == 'true'
-      run: |
-        cd ~/jo-bench
-        git pull origin main || true
+        if [ -d "jo-bench" ]; then
+          echo "jo-bench directory exists, updating..."
+          cd jo-bench
+          git fetch origin main || true
+          git reset --hard origin/main || true
+        else
+          echo "Cloning jo-bench repository..."
+          git clone --depth 1 https://github.com/danolivo/jo-bench.git
+        fi
 
     - name: Initialize PostgreSQL cluster
       run: |
