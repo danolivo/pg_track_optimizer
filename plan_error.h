@@ -44,6 +44,9 @@ typedef struct PlanEstimatorContext
 	double	rms_error;
 	double	twa_error;
 	double	wca_error;
+
+	/* Buffer usage statistics for this query execution */
+	int64	blks_accessed;	/* Sum of all block hits, reads, and writes */
 } PlanEstimatorContext;
 
 extern double plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx);

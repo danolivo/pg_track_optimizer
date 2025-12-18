@@ -46,7 +46,7 @@ PG_MODULE_MAGIC;
 	((eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0) \
 	)
 
-#define DATATBL_NCOLS	(11)
+#define DATATBL_NCOLS	(12)
 
 typedef struct TODSMRegistry
 {
@@ -83,6 +83,9 @@ typedef struct DSMOptimizerTrackerEntry
 	int32					plan_nodes;
 	double					exec_time;
 	int64					nexecs; /* Number of executions taken into account */
+
+	/* Buffer usage statistics - accumulated across all executions */
+	int64					blks_accessed;	/* Sum of all block hits, reads, and writes */
 } DSMOptimizerTrackerEntry;
 
 static const dshash_parameters dsh_params = {
@@ -341,12 +344,16 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 		entry->exec_time = 0.0;
 		entry->nexecs = 0;
+		entry->blks_accessed = 0;
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
 	}
 
 	/* Accumulate total execution time across all executions */
 	entry->exec_time += ctx->totaltime;
 	entry->nexecs++;
+
+	/* Accumulate buffer usage statistics across all executions */
+	entry->blks_accessed += ctx->blks_accessed;
 
 	dshash_release_lock(htab, entry);
 
@@ -542,6 +549,7 @@ to_show_data(PG_FUNCTION_ARGS)
 		values[i++] = Int32GetDatum(entry->plan_nodes);
 		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
 		values[i++] = Int64GetDatum(entry->nexecs);
+		values[i++] = Int64GetDatum(entry->blks_accessed);
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 		Assert(i == DATATBL_NCOLS);
 	}
@@ -622,7 +630,8 @@ static const DSMOptimizerTrackerEntry EOFEntry = {
 											.evaluated_nodes = -1,
 											.plan_nodes = -1,
 											.exec_time = -1.,
-											.nexecs = -1
+											.nexecs = -1,
+											.blks_accessed = -1
 											};
 #define IsEOFEntry(entry) ( \
 	(entry)->key.dbOid == EOFEntry.key.dbOid && \

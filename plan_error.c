@@ -220,6 +220,14 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	ctx->nnodes = 0;
 	ctx->counter = 0;
 
+	/* Collect buffer usage statistics from this execution (sum of all types) */
+	ctx->blks_accessed = queryDesc->totaltime->bufusage.shared_blks_hit +
+						 queryDesc->totaltime->bufusage.shared_blks_read +
+						 queryDesc->totaltime->bufusage.local_blks_hit +
+						 queryDesc->totaltime->bufusage.local_blks_read +
+						 queryDesc->totaltime->bufusage.temp_blks_read +
+						 queryDesc->totaltime->bufusage.temp_blks_written;
+
 	Assert(ctx->totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);
 
