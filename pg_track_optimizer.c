@@ -46,7 +46,7 @@ PG_MODULE_MAGIC;
 	((eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0) \
 	)
 
-#define DATATBL_NCOLS	(10)
+#define DATATBL_NCOLS	(11)
 
 typedef struct TODSMRegistry
 {
@@ -77,6 +77,7 @@ typedef struct DSMOptimizerTrackerEntry
 	double					avg_error;
 	double					rms_error;
 	double					twa_error;
+	double					wca_error;
 	dsa_pointer				querytext_ptr;
 	int32					assessed_nodes;
 	int32					total_nodes;
@@ -323,6 +324,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	entry->avg_error = ctx->avg_error;
 	entry->rms_error = ctx->rms_error;
 	entry->twa_error = ctx->twa_error;
+	entry->wca_error = ctx->wca_error;
 	entry->assessed_nodes = ctx->nnodes;
 	entry->total_nodes = ctx->counter;
 	entry->exec_time = ctx->totaltime;
@@ -535,6 +537,7 @@ to_show_data(PG_FUNCTION_ARGS)
 		values[i++] = Float8GetDatum(entry->avg_error);
 		values[i++] = Float8GetDatum(entry->rms_error);
 		values[i++] = Float8GetDatum(entry->twa_error);
+		values[i++] = Float8GetDatum(entry->wca_error);
 		values[i++] = Int32GetDatum(entry->assessed_nodes);
 		values[i++] = Int32GetDatum(entry->total_nodes);
 		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
@@ -614,6 +617,7 @@ static const DSMOptimizerTrackerEntry EOFEntry = {
 											.avg_error = -2.,
 											.rms_error = -2.,
 											.twa_error = -2.,
+											.wca_error = -2.,
 											.querytext_ptr = 0,
 											.assessed_nodes = -1,
 											.total_nodes = -1,
@@ -805,6 +809,7 @@ _load_hash_table(TODSMRegistry *state)
 		entry->avg_error = disk_entry.avg_error;
 		entry->rms_error = disk_entry.rms_error;
 		entry->twa_error = disk_entry.twa_error;
+		entry->wca_error = disk_entry.wca_error;
 		entry->assessed_nodes = disk_entry.assessed_nodes;
 		entry->total_nodes = disk_entry.total_nodes;
 		entry->exec_time = disk_entry.exec_time;

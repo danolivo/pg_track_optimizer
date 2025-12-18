@@ -35,6 +35,8 @@ typedef struct PlanEstimatorContext
 	double	avg_error;
 	double	rms_error;
 	double	twa_error;
+	double	totalcost;
+	double	wca_error;
 } PlanEstimatorContext;
 
 #endif /* PLAN_ERROR_H */
