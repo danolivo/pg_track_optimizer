@@ -1,0 +1,179 @@
+name: PostgreSQL Master Weekly Test
+
+on:
+  schedule:
+    # Run every Sunday at 22:00 UTC
+    - cron: '0 22 * * 0'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  test-master:
+    name: PostgreSQL Master - make check & installcheck
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout extension code
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libreadline-dev \
+          zlib1g-dev \
+          flex \
+          bison \
+          libxml2-dev \
+          libxslt-dev \
+          libssl-dev \
+          libxml2-utils \
+          xsltproc \
+          ccache
+
+    - name: Cache PostgreSQL master build
+      uses: actions/cache@v4
+      id: pg-cache
+      with:
+        path: ~/postgresql
+        key: ${{ runner.os }}-pg-master-weekly-${{ hashFiles('.github/workflows/weekly-master-test.yml') }}
+
+    - name: Clone PostgreSQL master
+      if: steps.pg-cache.outputs.cache-hit != 'true'
+      run: |
+        cd ~
+        git clone --depth 1 --branch master https://github.com/postgres/postgres.git postgresql
+
+    - name: Update PostgreSQL master
+      if: steps.pg-cache.outputs.cache-hit == 'true'
+      run: |
+        cd ~/postgresql
+        git fetch origin master
+        git reset --hard origin/master
+
+    - name: Build PostgreSQL master
+      run: |
+        cd ~/postgresql
+        ./configure --prefix=$HOME/postgresql/inst --enable-debug --enable-cassert --enable-depend
+        make -j$(nproc)
+        make install
+
+    - name: Add PostgreSQL to PATH
+      run: |
+        echo "$HOME/postgresql/inst/bin" >> $GITHUB_PATH
+        echo "PG_CONFIG=$HOME/postgresql/inst/bin/pg_config" >> $GITHUB_ENV
+
+    - name: Build extension
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        make USE_PGXS=1 clean
+        make USE_PGXS=1
+
+    - name: Run make check
+      id: make-check
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        make USE_PGXS=1 check
+
+    - name: Show regression diffs on make check failure
+      if: failure() && steps.make-check.outcome == 'failure'
+      run: |
+        if [ -f regression.diffs ]; then
+          echo "=== Regression diffs from make check ==="
+          cat regression.diffs
+        fi
+
+    - name: Install extension for installcheck
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        make USE_PGXS=1 install
+
+    - name: Initialize PostgreSQL cluster
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        initdb -D $HOME/pgdata
+
+    - name: Configure PostgreSQL with pg_track_optimizer
+      run: |
+        cat >> $HOME/pgdata/postgresql.conf <<EOF
+        shared_preload_libraries = 'pg_track_optimizer'
+        pg_track_optimizer.mode = 'forced'
+        compute_query_id = on
+        EOF
+
+    - name: Start PostgreSQL
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        pg_ctl -D $HOME/pgdata -l $HOME/pgdata/logfile start
+        # Wait for PostgreSQL to start
+        for i in {1..30}; do
+          if pg_isready -h localhost; then
+            break
+          fi
+          sleep 1
+        done
+        pg_isready -h localhost
+
+    - name: Run make installcheck
+      id: make-installcheck
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        make USE_PGXS=1 installcheck
+
+    - name: Show PostgreSQL log on installcheck failure
+      if: failure() && steps.make-installcheck.outcome == 'failure'
+      run: |
+        if [ -f $HOME/pgdata/logfile ]; then
+          echo "=== PostgreSQL log ==="
+          cat $HOME/pgdata/logfile
+        fi
+
+    - name: Show regression diffs on installcheck failure
+      if: failure() && steps.make-installcheck.outcome == 'failure'
+      run: |
+        if [ -f regression.diffs ]; then
+          echo "=== Regression diffs from installcheck ==="
+          cat regression.diffs
+        fi
+
+    - name: Stop PostgreSQL
+      if: always()
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        pg_ctl -D $HOME/pgdata stop || true
+
+    - name: Upload test artifacts on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-artifacts-pg-master
+        path: |
+          regression.diffs
+          regression.out
+          results/
+          ~/pgdata/logfile
+        if-no-files-found: ignore
+        retention-days: 7
+
+    - name: Send failure notification email
+      if: failure()
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 465
+        secure: true
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: 'PostgreSQL Master Weekly Test Failed - pg_track_optimizer'
+        to: lepihov@gmail.com
+        from: GitHub Actions <noreply@github.com>
+        body: |
+          The weekly PostgreSQL master branch test for pg_track_optimizer has failed.
+
+          Workflow: ${{ github.workflow }}
+          Repository: ${{ github.repository }}
+          Run URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Please check the workflow logs for details.
+
+          Test artifacts are available for 7 days.
