@@ -49,7 +49,7 @@ cat > "$WIKI_PAGE" <<EOF
 
 ## Top Queries by Error Metrics
 
-This table shows queries that appear in the top 10 for any error metric (avg_error, rms_error, twa_error, or wca_error).
+This table shows queries that appear in the top 10 for **all** error metrics (avg_error, rms_error, twa_error, and wca_error). These are the queries with consistently poor estimation across all criteria.
 
 \`\`\`
 ${BENCHMARK_RESULTS}
@@ -59,7 +59,7 @@ ${BENCHMARK_RESULTS}
 
 The results above include the following metrics for each query:
 - **queryid**: Internal PostgreSQL query identifier
-- **query**: The SQL query text (normalised, with literals replaced by placeholders)
+- **query**: The SQL query text (normalised, with literals replaced by placeholders; truncated to first 32 characters)
 - **avg_error**: Simple average of log-scale errors across plan nodes
 - **rms_error**: Root Mean Square error (emphasises large estimation errors)
 - **twa_error**: Time-Weighted Average error (highlights errors in slow nodes)
@@ -68,7 +68,7 @@ The results above include the following metrics for each query:
 - **blks_accessed**: Total blocks accessed (shared, local, and temporary blocks hit/read/written)
 - **nexecs**: Number of times the query was executed
 
-Queries are shown if they appear in the top 10 for at least one error metric.
+Only queries appearing in the top 10 of **every** error metric are shown, representing the most consistently problematic queries.
 
 ---
 

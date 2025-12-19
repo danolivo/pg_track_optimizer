@@ -214,21 +214,19 @@ jobs:
 
         # Execute the benchmark query and save to temp file
         psql -d jobench -c "
-          SELECT DISTINCT p.queryid, p.query, p.avg_error, p.rms_error,
+          SELECT p.queryid, LEFT(p.query, 32) as query, p.avg_error, p.rms_error,
                  p.twa_error, p.wca_error, p.exec_time, p.blks_accessed, p.nexecs
-          FROM pg_track_optimizer p
+          FROM pg_track_optimizer() p
           WHERE p.queryid IN (
-            SELECT queryid FROM (
-              (SELECT queryid FROM pg_track_optimizer ORDER BY avg_error DESC LIMIT 10)
-              UNION ALL
-              (SELECT queryid FROM pg_track_optimizer ORDER BY rms_error DESC LIMIT 10)
-              UNION ALL
-              (SELECT queryid FROM pg_track_optimizer ORDER BY twa_error DESC LIMIT 10)
-              UNION ALL
-              (SELECT queryid FROM pg_track_optimizer ORDER BY wca_error DESC LIMIT 10)
-            ) top_queries
+            SELECT queryid FROM pg_track_optimizer() ORDER BY avg_error DESC LIMIT 10
+            INTERSECT
+            SELECT queryid FROM pg_track_optimizer() ORDER BY rms_error DESC LIMIT 10
+            INTERSECT
+            SELECT queryid FROM pg_track_optimizer() ORDER BY twa_error DESC LIMIT 10
+            INTERSECT
+            SELECT queryid FROM pg_track_optimizer() ORDER BY wca_error DESC LIMIT 10
           )
-          ORDER BY p.queryid;
+          ORDER BY p.avg_error DESC;
         " > /tmp/benchmark_results.txt
 
         # Save script path and extension commit before changing directories
