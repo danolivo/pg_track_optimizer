@@ -228,7 +228,7 @@ jobs:
               (SELECT queryid FROM pg_track_optimizer ORDER BY wca_error DESC LIMIT 10)
             ) top_queries
           )
-          ORDER BY pp.queryid;
+          ORDER BY p.queryid;
         " > /tmp/benchmark_results.txt
 
         # Save script path and extension commit before changing directories
