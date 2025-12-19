@@ -141,7 +141,7 @@ jobs:
     - name: Analyse tables
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
-        psql -d jobench -c "ANALYZE;"
+        psql -d jobench -c "VACUUM ANALYZE;"
 
     - name: Reset pg_track_optimizer statistics
       run: |
@@ -167,7 +167,7 @@ jobs:
     - name: Export pg_track_optimizer results to CSV
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
-        psql -d jobench -c "\COPY (SELECT * FROM pg_track_optimizer() ORDER BY avg_error DESC) TO '/tmp/pg_track_optimizer_results.csv' WITH CSV HEADER"
+        psql -d jobench -c "\COPY (SELECT * FROM pg_track_optimizer ORDER BY avg_error DESC) TO '/tmp/pg_track_optimizer_results.csv' WITH CSV HEADER"
         echo "Results exported to CSV:"
         head -20 /tmp/pg_track_optimizer_results.csv
 
@@ -185,7 +185,7 @@ jobs:
             SUM(nexecs) as total_executions,
             ROUND(SUM(exec_time)::numeric, 2) as total_exec_time_ms,
             SUM(blks_accessed) as total_blocks_accessed
-          FROM pg_track_optimizer();
+          FROM pg_track_optimizer;
         "
 
     - name: Show top 10 worst queries
@@ -201,7 +201,7 @@ jobs:
             ROUND(exec_time::numeric, 2) as exec_time_ms,
             blks_accessed,
             nexecs
-          FROM pg_track_optimizer()
+          FROM pg_track_optimizer
           ORDER BY avg_error DESC
           LIMIT 10;
         "
@@ -216,19 +216,19 @@ jobs:
         psql -d jobench -c "
           SELECT DISTINCT p.queryid, p.query, p.avg_error, p.rms_error,
                  p.twa_error, p.wca_error, p.exec_time, p.blks_accessed, p.nexecs
-          FROM pg_track_optimizer() p
+          FROM pg_track_optimizer p
           WHERE p.queryid IN (
             SELECT queryid FROM (
-              SELECT queryid FROM pg_track_optimizer() ORDER BY avg_error DESC LIMIT 10
-              UNION
-              SELECT queryid FROM pg_track_optimizer() ORDER BY rms_error DESC LIMIT 10
-              UNION
-              SELECT queryid FROM pg_track_optimizer() ORDER BY twa_error DESC LIMIT 10
-              UNION
-              SELECT queryid FROM pg_track_optimizer() ORDER BY wca_error DESC LIMIT 10
+              (SELECT queryid FROM pg_track_optimizer ORDER BY avg_error DESC LIMIT 10)
+              UNION ALL
+              (SELECT queryid FROM pg_track_optimizer ORDER BY rms_error DESC LIMIT 10)
+              UNION ALL
+              (SELECT queryid FROM pg_track_optimizer ORDER BY twa_error DESC LIMIT 10)
+              UNION ALL
+              (SELECT queryid FROM pg_track_optimizer ORDER BY wca_error DESC LIMIT 10)
             ) top_queries
           )
-          ORDER BY p.avg_error DESC;
+          ORDER BY pp.queryid;
         " > /tmp/benchmark_results.txt
 
         # Save script path and extension commit before changing directories
