@@ -184,7 +184,7 @@ jobs:
             ROUND(AVG(wca_error)::numeric, 2) as wca_error_mean,
             SUM(nexecs) as total_executions,
             ROUND(SUM(exec_time)::numeric, 2) as total_exec_time_ms,
-            SUM(blks_accessed) as total_blocks_accessed
+            SUM(blks_avg) as total_blks_avg
           FROM pg_track_optimizer;
         "
 
