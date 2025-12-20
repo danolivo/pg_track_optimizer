@@ -68,6 +68,28 @@ SELECT
     stats_min(42.0::statistics) as min,
     stats_max(42.0::statistics) as max;
 
+-- Test 10: Field accessor using -> operator
+SELECT
+    sensor_id,
+    measurements -> 'count' as count,
+    ROUND((measurements -> 'mean')::numeric, 2) as mean,
+    measurements -> 'min' as min,
+    measurements -> 'max' as max,
+    ROUND((measurements -> 'variance')::numeric, 2) as variance,
+    ROUND((measurements -> 'stddev')::numeric, 2) as stddev
+FROM sensor_data
+WHERE sensor_id <= 3
+ORDER BY sensor_id;
+
+-- Test 11: Using -> operator in WHERE clause
+SELECT sensor_id, ROUND((measurements -> 'mean')::numeric, 2) as mean
+FROM sensor_data
+WHERE (measurements -> 'mean') > 15
+ORDER BY sensor_id;
+
+-- Test 12: Invalid field name (should error)
+-- SELECT measurements -> 'invalid_field' FROM sensor_data LIMIT 1;
+
 -- Clean up
 DROP TABLE sensor_data;
 DROP EXTENSION pg_track_optimizer;

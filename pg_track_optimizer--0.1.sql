@@ -141,6 +141,22 @@ CREATE OPERATOR = (
 
 COMMENT ON OPERATOR = (statistics, statistics) IS 'Equality operator for statistics type';
 
+-- Field accessor operator
+CREATE FUNCTION statistics_get_field(statistics, text)
+    RETURNS double precision
+    AS 'MODULE_PATHNAME', 'statistics_get_field'
+    LANGUAGE C IMMUTABLE STRICT;
+
+COMMENT ON FUNCTION statistics_get_field(statistics, text) IS 'Access statistics field by name using -> operator';
+
+CREATE OPERATOR -> (
+    LEFTARG = statistics,
+    RIGHTARG = text,
+    FUNCTION = statistics_get_field
+);
+
+COMMENT ON OPERATOR -> (statistics, text) IS 'Field accessor operator for statistics type (e.g., stats -> ''mean'')';
+
 CREATE FUNCTION pg_track_optimizer(
 	OUT dboid			Oid,
 	OUT queryid			bigint,
