@@ -48,6 +48,7 @@ PG_FUNCTION_INFO_V1(statistics_get_stddev);
 PG_FUNCTION_INFO_V1(statistics_get_min);
 PG_FUNCTION_INFO_V1(statistics_get_max);
 PG_FUNCTION_INFO_V1(statistics_eq);
+PG_FUNCTION_INFO_V1(statistics_get_field);
 
 /*
  * Input function: converts text representation to internal format
@@ -326,4 +327,66 @@ statistics_eq(PG_FUNCTION_ARGS)
         PG_RETURN_BOOL(false);
 
     PG_RETURN_BOOL(true);
+}
+
+/*
+ * Field accessor using -> operator
+ * Allows accessing statistics fields like: stats -> 'mean'
+ * Supported fields: count, mean, variance, stddev, min, max
+ */
+Datum
+statistics_get_field(PG_FUNCTION_ARGS)
+{
+    Statistics *stats = PG_GETARG_STATISTICS_P(0);
+    text       *field_text = PG_GETARG_TEXT_PP(1);
+    char       *field_name;
+    double      result;
+
+    /* Convert text to C string */
+    field_name = text_to_cstring(field_text);
+
+    /* Determine which field was requested */
+    if (strcmp(field_name, "count") == 0)
+    {
+        result = (double) stats->count;
+    }
+    else if (strcmp(field_name, "mean") == 0)
+    {
+        result = stats->mean;
+    }
+    else if (strcmp(field_name, "variance") == 0)
+    {
+        if (stats->count > 1)
+            result = stats->m2 / (stats->count - 1);
+        else
+            result = 0.0;
+    }
+    else if (strcmp(field_name, "stddev") == 0)
+    {
+        if (stats->count > 1)
+        {
+            double variance = stats->m2 / (stats->count - 1);
+            result = sqrt(variance);
+        }
+        else
+            result = 0.0;
+    }
+    else if (strcmp(field_name, "min") == 0)
+    {
+        result = stats->min;
+    }
+    else if (strcmp(field_name, "max") == 0)
+    {
+        result = stats->max;
+    }
+    else
+    {
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("invalid field name for statistics type: \"%s\"", field_name),
+                 errhint("Valid field names are: count, mean, variance, stddev, min, max")));
+    }
+
+    pfree(field_name);
+    PG_RETURN_FLOAT8(result);
 }
