@@ -13,6 +13,32 @@ SELECT (42.1::double precision)::statistics;
  (count:1,mean:42.1,min:42.1,max:42.1,variance:0)
 (1 row)
 
+SELECT (NULL::double precision)::statistics;
+ statistics 
+------------
+ 
+(1 row)
+
+SELECT q.s, q.s + 1.0, q.s + 2.0, q.s + NULL
+  FROM (VALUES (1.0::statistics)) AS q(s);
+                    s                    |                ?column?                 |                  ?column?                   | ?column? 
+-----------------------------------------+-----------------------------------------+---------------------------------------------+----------
+ (count:1,mean:1,min:1,max:1,variance:0) | (count:2,mean:1,min:1,max:1,variance:0) | (count:2,mean:1.5,min:1,max:2,variance:0.5) | 
+(1 row)
+
+SELECT q.s, q.s + 1.0, q.s + NULL FROM (VALUES (NULL::statistics)) AS q(s);
+ s | ?column? | ?column? 
+---+----------+----------
+   |          | 
+(1 row)
+
+SELECT q.s, q.s + 1.0 FROM
+  (VALUES (('+Infinity'::double precision)::statistics)) AS q(s);
+                              s                               |                      ?column?                      
+--------------------------------------------------------------+----------------------------------------------------
+ (count:1,mean:Infinity,min:Infinity,max:Infinity,variance:0) | (count:2,mean:NaN,min:1,max:Infinity,variance:NaN)
+(1 row)
+
 -- Test 2: Create table with statistics column
 CREATE TABLE sensor_data (
   sensor_id integer,
@@ -32,12 +58,12 @@ UPDATE sensor_data SET measurements = measurements + 22.0 WHERE sensor_id = 2;
 -- NOTE: don't forget to stabilise output rounding double variables
 SELECT
     sensor_id,
-    stats_count(measurements) as count,
-    ROUND(stats_mean(measurements)::numeric, 2) as mean,
-    stats_min(measurements) as min,
-    stats_max(measurements) as max,
-    ROUND(stats_variance(measurements)::numeric, 2) as variance,
-    ROUND(stats_stddev(measurements)::numeric, 2) as stddev
+    measurements -> 'count' as count,
+    ROUND((measurements -> 'mean')::numeric, 2) as mean,
+    measurements -> 'min' as min,
+    measurements -> 'max' as max,
+    ROUND((measurements -> 'variance')::numeric, 2) as variance,
+    ROUND((measurements -> 'stddev')::numeric, 2) as stddev
 FROM sensor_data
 ORDER BY sensor_id;
  sensor_id | count | mean  | min  | max  | variance | stddev 
@@ -82,19 +108,6 @@ ORDER BY sensor_id;
  sensor_id |                 measurements                 
 -----------+----------------------------------------------
          1 | (count:3,mean:20,min:10,max:30,variance:100)
-(1 row)
-
--- Test 9: Single value statistics (no variance)
-SELECT
-    stats_count(42.0::statistics) as count,
-    stats_mean(42.0::statistics) as mean,
-    stats_variance(42.0::statistics) as variance,
-    stats_stddev(42.0::statistics) as stddev,
-    stats_min(42.0::statistics) as min,
-    stats_max(42.0::statistics) as max;
- count | mean | variance | stddev | min | max 
--------+------+----------+--------+-----+-----
-     1 |   42 |        0 |      0 |  42 |  42
 (1 row)
 
 -- Test 10: Field accessor using -> operator
