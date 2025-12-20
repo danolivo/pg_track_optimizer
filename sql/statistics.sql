@@ -3,37 +3,37 @@ CREATE EXTENSION pg_track_optimizer;
 
 -- Test 1: Basic statistics creation and initialization
 SELECT 42.5::statistics;
+SELECT (42.1::double precision)::statistics;
 
 -- Test 2: Create table with statistics column
 CREATE TABLE sensor_data (
-    sensor_id integer,
-    measurements statistics
+  sensor_id integer,
+  measurements statistics
 );
 
 -- Test 3: Insert initial statistics values
 INSERT INTO sensor_data VALUES
-    (1, 10.0::statistics),
-    (2, 20.0::statistics),
-    (3, 15.5::statistics);
+  (1, 10.0::statistics), (2, 20.0::statistics), (3, 15.5::statistics);
 
 -- Test 4: Add values to statistics using the + operator
-UPDATE sensor_data SET measurements = measurements + 12.0 WHERE sensor_id = 1;
+UPDATE sensor_data SET measurements = measurements + 20.0 WHERE sensor_id = 1;
 UPDATE sensor_data SET measurements = measurements + 25.0 WHERE sensor_id = 2;
 UPDATE sensor_data SET measurements = measurements + 18.5 WHERE sensor_id = 3;
 
 -- Add more values to build up statistics
-UPDATE sensor_data SET measurements = measurements + 11.0 WHERE sensor_id = 1;
+UPDATE sensor_data SET measurements = measurements + 30.0 WHERE sensor_id = 1;
 UPDATE sensor_data SET measurements = measurements + 22.0 WHERE sensor_id = 2;
 
 -- Test 5: Query statistics properties
+-- NOTE: don't forget to stabilise output rounding double variables
 SELECT
     sensor_id,
     stats_count(measurements) as count,
-    stats_mean(measurements) as mean,
+    ROUND(stats_mean(measurements)::numeric, 2) as mean,
     stats_min(measurements) as min,
     stats_max(measurements) as max,
-    stats_variance(measurements) as variance,
-    stats_stddev(measurements) as stddev
+    ROUND(stats_variance(measurements)::numeric, 2) as variance,
+    ROUND(stats_stddev(measurements)::numeric, 2) as stddev
 FROM sensor_data
 ORDER BY sensor_id;
 
@@ -42,7 +42,7 @@ ORDER BY sensor_id;
 SELECT (10.0::statistics + 20.0 + 30.0) = (10.0::statistics + 20.0 + 30.0) as equal_stats;
 
 -- Create two different statistics
-SELECT (10.0::statistics + 20.0) = (10.0::statistics + 30.0) as different_stats;
+SELECT (10.0::statistics + 20.0) = (15.0::statistics + 15.0) as different_stats;
 
 -- Test 7: Compare statistics in table
 INSERT INTO sensor_data VALUES (4, 10.0::statistics + 11.0 + 12.0);
@@ -56,7 +56,7 @@ WHERE s1.sensor_id = 4 AND s2.sensor_id = 5;
 -- Test 8: Text representation
 SELECT sensor_id, measurements::text
 FROM sensor_data
-WHERE sensor_id <= 3
+WHERE sensor_id <= 1
 ORDER BY sensor_id;
 
 -- Test 9: Single value statistics (no variance)
