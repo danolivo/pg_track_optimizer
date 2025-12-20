@@ -34,6 +34,7 @@
 #include "utils/guc.h"
 
 #include "plan_error.h"
+#include "statistics.h"
 
 PG_MODULE_MAGIC;
 
@@ -84,8 +85,8 @@ typedef struct DSMOptimizerTrackerEntry
 	double					exec_time;
 	int64					nexecs; /* Number of executions taken into account */
 
-	/* Buffer usage statistics - accumulated across all executions */
-	int64					blks_accessed;	/* Sum of all block hits, reads, and writes */
+	/* Buffer usage statistics - accumulated using statistics type */
+	Statistics				blks_accessed;	/* Cumulative statistics of block accesses */
 } DSMOptimizerTrackerEntry;
 
 static const dshash_parameters dsh_params = {
@@ -344,7 +345,14 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 		entry->exec_time = 0.0;
 		entry->nexecs = 0;
-		entry->blks_accessed = 0;
+
+		/* Initialize statistics for block accesses */
+		entry->blks_accessed.count = 0;
+		entry->blks_accessed.mean = 0.0;
+		entry->blks_accessed.m2 = 0.0;
+		entry->blks_accessed.min = 0.0;
+		entry->blks_accessed.max = 0.0;
+
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
 	}
 
@@ -352,8 +360,35 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	entry->exec_time += ctx->totaltime;
 	entry->nexecs++;
 
-	/* Accumulate buffer usage statistics across all executions */
-	entry->blks_accessed += ctx->blks_accessed;
+	/* Accumulate buffer usage statistics using Welford's algorithm */
+	{
+		double		value = (double) ctx->blks_accessed;
+		double		delta, delta2;
+		int64		new_count;
+
+		new_count = entry->blks_accessed.count + 1;
+		delta = value - entry->blks_accessed.mean;
+
+		entry->blks_accessed.count = new_count;
+		entry->blks_accessed.mean = entry->blks_accessed.mean + delta / new_count;
+
+		delta2 = value - entry->blks_accessed.mean;
+		entry->blks_accessed.m2 = entry->blks_accessed.m2 + delta * delta2;
+
+		/* Update min/max */
+		if (new_count == 1)
+		{
+			entry->blks_accessed.min = value;
+			entry->blks_accessed.max = value;
+		}
+		else
+		{
+			if (value < entry->blks_accessed.min)
+				entry->blks_accessed.min = value;
+			if (value > entry->blks_accessed.max)
+				entry->blks_accessed.max = value;
+		}
+	}
 
 	dshash_release_lock(htab, entry);
 
@@ -549,7 +584,14 @@ to_show_data(PG_FUNCTION_ARGS)
 		values[i++] = Int32GetDatum(entry->plan_nodes);
 		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
 		values[i++] = Int64GetDatum(entry->nexecs);
-		values[i++] = Int64GetDatum(entry->blks_accessed);
+
+		/* Return blks_accessed as statistics type */
+		{
+			Statistics *stats_copy = (Statistics *) palloc(sizeof(Statistics));
+			memcpy(stats_copy, &entry->blks_accessed, sizeof(Statistics));
+			values[i++] = StatisticsPGetDatum(stats_copy);
+		}
+
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 		Assert(i == DATATBL_NCOLS);
 	}
@@ -631,7 +673,13 @@ static const DSMOptimizerTrackerEntry EOFEntry = {
 											.plan_nodes = -1,
 											.exec_time = -1.,
 											.nexecs = -1,
-											.blks_accessed = -1
+											.blks_accessed = {
+												.count = -1,
+												.mean = -1.0,
+												.m2 = -1.0,
+												.min = -1.0,
+												.max = -1.0
+											}
 											};
 #define IsEOFEntry(entry) ( \
 	(entry)->key.dbOid == EOFEntry.key.dbOid && \

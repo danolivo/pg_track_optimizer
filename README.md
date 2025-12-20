@@ -147,9 +147,9 @@ LIMIT 10;
 - **plan_nodes**: Total plan nodes (some may be skipped, e.g., never-executed branches)
 - **exec_time**: Total execution time across all executions (milliseconds). Divide by `nexecs` to get average per execution
 - **nexecs**: Number of times the query was executed
-- **blks_accessed**: Total number of blocks accessed (sum of shared, local, and temporary blocks hit, read, and written) across all executions
+- **blks_accessed**: Cumulative statistics of blocks accessed per execution (statistics type). Tracks count, mean, variance, stddev, min, and max of total blocks (shared + local + temporary) accessed in each query execution. Use `->` operator to access fields: `blks_accessed -> 'mean'`, `blks_accessed -> 'stddev'`, etc.
 
-> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, and `blks_accessed` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
+> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, and `nexecs` provide query execution metrics similar to those found in `pg_stat_statements`. The `blks_accessed` column extends this by providing full statistical analysis of block access patterns across executions using the `statistics` type. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
 
 ### Managing Statistics
 
