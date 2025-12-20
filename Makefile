@@ -3,7 +3,7 @@
 MODULE_big = pg_track_optimizer
 OBJS = \
 	$(WIN32RES) \
-	pg_track_optimizer.o plan_error.o
+	pg_track_optimizer.o plan_error.o statistics.o
 PGFILEDESC = "pg_track_optimizer - track planning decisions"
 
 EXTENSION = pg_track_optimizer
