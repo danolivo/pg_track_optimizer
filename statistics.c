@@ -44,6 +44,7 @@ PG_FUNCTION_INFO_V1(statistics_get_variance);
 PG_FUNCTION_INFO_V1(statistics_get_stddev);
 PG_FUNCTION_INFO_V1(statistics_get_min);
 PG_FUNCTION_INFO_V1(statistics_get_max);
+PG_FUNCTION_INFO_V1(statistics_eq);
 #include "varatt.h"
 /*
  * Input function: converts text representation to internal format
@@ -270,4 +271,33 @@ statistics_get_max(PG_FUNCTION_ARGS)
 {
     Statistics *stats = PG_GETARG_STATISTICS_P(0);
     PG_RETURN_FLOAT8(stats->max);
+}
+
+/*
+ * Equality comparison for statistics type
+ * Two statistics objects are equal if all their fields match
+ */
+Datum
+statistics_eq(PG_FUNCTION_ARGS)
+{
+    Statistics *stats1 = PG_GETARG_STATISTICS_P(0);
+    Statistics *stats2 = PG_GETARG_STATISTICS_P(1);
+
+    /* Compare all fields for equality */
+    if (stats1->count != stats2->count)
+        PG_RETURN_BOOL(false);
+
+    if (stats1->mean != stats2->mean)
+        PG_RETURN_BOOL(false);
+
+    if (stats1->m2 != stats2->m2)
+        PG_RETURN_BOOL(false);
+
+    if (stats1->min != stats2->min)
+        PG_RETURN_BOOL(false);
+
+    if (stats1->max != stats2->max)
+        PG_RETURN_BOOL(false);
+
+    PG_RETURN_BOOL(true);
 }
