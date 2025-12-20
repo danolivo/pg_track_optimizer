@@ -14,10 +14,10 @@
 /*
  * Internal representation of statistics
  * Uses Welford's algorithm to maintain numerically stable running statistics
+ * Fixed-size type (40 bytes) - no varlena header needed
  */
 typedef struct Statistics
 {
-    int32       vl_len_;        /* varlena header (do not touch directly!) */
     int64       count;          /* number of values */
     double      mean;           /* running mean */
     double      m2;             /* sum of squared differences from mean (for variance) */
@@ -26,7 +26,7 @@ typedef struct Statistics
 } Statistics;
 
 /* Macros for easier access */
-#define DatumGetStatisticsP(X)      ((Statistics *) PG_DETOAST_DATUM(X))
+#define DatumGetStatisticsP(X)      ((Statistics *) DatumGetPointer(X))
 #define StatisticsPGetDatum(X)      PointerGetDatum(X)
 #define PG_GETARG_STATISTICS_P(n)   DatumGetStatisticsP(PG_GETARG_DATUM(n))
 #define PG_RETURN_STATISTICS_P(x)   return StatisticsPGetDatum(x)
@@ -45,7 +45,7 @@ PG_FUNCTION_INFO_V1(statistics_get_stddev);
 PG_FUNCTION_INFO_V1(statistics_get_min);
 PG_FUNCTION_INFO_V1(statistics_get_max);
 PG_FUNCTION_INFO_V1(statistics_eq);
-#include "varatt.h"
+
 /*
  * Input function: converts text representation to internal format
  * Format: (count:N,mean:M,min:MIN,max:MAX,variance:V)
@@ -76,7 +76,6 @@ statistics_in(PG_FUNCTION_ARGS)
 
     /* Allocate and initialize the result */
     result = (Statistics *) palloc(sizeof(Statistics));
-    SET_VARSIZE(result, sizeof(Statistics));
 
     result->count = count;
     result->mean = mean;
@@ -124,7 +123,6 @@ statistics_recv(PG_FUNCTION_ARGS)
     Statistics *result;
 
     result = (Statistics *) palloc(sizeof(Statistics));
-    SET_VARSIZE(result, sizeof(Statistics));
 
     result->count = pq_getmsgint64(buf);
     result->mean = pq_getmsgfloat8(buf);
@@ -165,7 +163,6 @@ statistics_init(PG_FUNCTION_ARGS)
     Statistics *result;
 
     result = (Statistics *) palloc(sizeof(Statistics));
-    SET_VARSIZE(result, sizeof(Statistics));
 
     result->count = 1;
     result->mean = value;
@@ -191,7 +188,6 @@ statistics_add(PG_FUNCTION_ARGS)
 
     /* Allocate result */
     result = (Statistics *) palloc(sizeof(Statistics));
-    SET_VARSIZE(result, sizeof(Statistics));
 
     /* Welford's algorithm for incremental mean and variance */
     new_count = stats->count + 1;
