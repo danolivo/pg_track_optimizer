@@ -169,7 +169,7 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT plan_nodes      integer,
 	OUT exec_time       float8,
 	OUT nexecs          bigint,
-	OUT blks_accessed   bigint
+	OUT blks_accessed   Statistics
 )
 RETURNS setof record
 AS 'MODULE_PATHNAME', 'to_show_data'

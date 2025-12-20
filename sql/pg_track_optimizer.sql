@@ -47,7 +47,7 @@ SET pg_track_optimizer.mode = 'forced';
 EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)
 SELECT * FROM t1;
 
-SELECT query,avg_error,rms_error,evaluated_nodes,plan_nodes,nexecs
+SELECT query,avg_error,rms_error,evaluated_nodes,plan_nodes,nexecs,blks_accessed
 FROM pg_track_optimizer() WHERE query LIKE '%FROM t1%';
 
 /*
@@ -79,8 +79,7 @@ SELECT val FROM verify_test;
 -- demonstrate how the error grows and show reasoning for the final value in
 -- a more understandable manner.
 -- So, make this test helpful in the future ...
-SELECT
-  query,evaluated_nodes,plan_nodes,nexecs
+SELECT query,evaluated_nodes,plan_nodes,nexecs
 FROM pg_track_optimizer() WHERE query LIKE '%FROM verify_test%';
 
 DROP EXTENSION pg_track_optimizer;

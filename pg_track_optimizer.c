@@ -34,6 +34,7 @@
 #include "utils/guc.h"
 
 #include "plan_error.h"
+#include "statistics.h"
 
 PG_MODULE_MAGIC;
 
@@ -85,7 +86,7 @@ typedef struct DSMOptimizerTrackerEntry
 	int64					nexecs; /* Number of executions taken into account */
 
 	/* Buffer usage statistics - accumulated across all executions */
-	int64					blks_accessed;	/* Sum of all block hits, reads, and writes */
+	Statistics				blks_accessed;	/* Sum of all block hits, reads, and writes */
 } DSMOptimizerTrackerEntry;
 
 static const dshash_parameters dsh_params = {
@@ -317,8 +318,10 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 	if (counter == UINT32_MAX ||
 		counter > (uint32)(hash_mem / sizeof(DSMOptimizerTrackerEntry)))
+	{
 		/* TODO: set status of full hash table */
 		return false;
+	}
 
 	memset(&key, 0, sizeof(DSMOptimizerTrackerKey));
 	key.dbOid = MyDatabaseId;
@@ -554,7 +557,7 @@ to_show_data(PG_FUNCTION_ARGS)
 		values[i++] = Int32GetDatum(entry->plan_nodes);
 		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
 		values[i++] = Int64GetDatum(entry->nexecs);
-		values[i++] = Int64GetDatum(entry->blks_accessed);
+		values[i++] = PointerGetDatum((void *) &entry->blks_accessed);
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 		Assert(i == DATATBL_NCOLS);
 	}

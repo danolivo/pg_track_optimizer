@@ -13,7 +13,7 @@ CREATE EXTENSION pg_track_optimizer;
  plan_nodes      | integer          |           |          | 
  exec_time       | double precision |           |          | 
  nexecs          | bigint           |           |          | 
- blks_accessed   | bigint           |           |          | 
+ blks_accessed   | statistics       |           |          | 
 
 \df pg_track_optimizer_flush
                                  List of functions
