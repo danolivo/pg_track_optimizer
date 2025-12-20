@@ -29,7 +29,7 @@ CREATE FUNCTION statistics_send(statistics)
 
 -- Create the type
 CREATE TYPE statistics (
-    INTERNALLENGTH = 48,
+    INTERNALLENGTH = 40,
     INPUT = statistics_in,
     OUTPUT = statistics_out,
     RECEIVE = statistics_recv,
