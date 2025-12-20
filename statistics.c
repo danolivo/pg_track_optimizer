@@ -36,7 +36,10 @@ PG_FUNCTION_INFO_V1(statistics_in);
 PG_FUNCTION_INFO_V1(statistics_out);
 PG_FUNCTION_INFO_V1(statistics_recv);
 PG_FUNCTION_INFO_V1(statistics_send);
-PG_FUNCTION_INFO_V1(statistics_init);
+
+PG_FUNCTION_INFO_V1(statistics_init_double);
+PG_FUNCTION_INFO_V1(statistics_init_numeric);
+
 PG_FUNCTION_INFO_V1(statistics_add);
 PG_FUNCTION_INFO_V1(statistics_get_count);
 PG_FUNCTION_INFO_V1(statistics_get_mean);
@@ -154,10 +157,10 @@ statistics_send(PG_FUNCTION_ARGS)
 
 /*
  * Initialize statistics from a single value
- * Usage: statistics_init(42.5) returns a statistics object with count=1
+ * Usage: statistics_init_double(42.5) returns a statistics object with count=1
  */
 Datum
-statistics_init(PG_FUNCTION_ARGS)
+statistics_init_double(PG_FUNCTION_ARGS)
 {
     double      value = PG_GETARG_FLOAT8(0);
     Statistics *result;
@@ -167,6 +170,33 @@ statistics_init(PG_FUNCTION_ARGS)
     result->count = 1;
     result->mean = value;
     result->m2 = 0.0;      /* No variance with single value */
+    result->min = value;
+    result->max = value;
+
+    PG_RETURN_STATISTICS_P(result);
+}
+#include "utils/numeric.h"
+Datum
+statistics_init_numeric(PG_FUNCTION_ARGS)
+{
+	Numeric		num = PG_GETARG_NUMERIC(0);
+	char	   *tmp;
+	Datum		float_value;
+	double		value;
+	Statistics *result;
+
+	/* Convert numeric to double */
+	tmp = DatumGetCString(DirectFunctionCall1(numeric_out,
+											  NumericGetDatum(num)));
+	float_value = DirectFunctionCall1(float8in, CStringGetDatum(tmp));
+	pfree(tmp);
+	value = DatumGetFloat8(float_value);
+
+    result = (Statistics *) palloc(sizeof(Statistics));
+
+    result->count = 1;
+    result->mean = value;
+    result->m2 = 0.0;
     result->min = value;
     result->max = value;
 
