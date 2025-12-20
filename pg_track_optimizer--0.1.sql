@@ -43,15 +43,21 @@ COMMENT ON TYPE statistics IS 'Incremental statistics type using Welford''s algo
 -- Initialization operator (double precision -> statistics)
 --
 
-CREATE FUNCTION statistics_init(double precision)
+CREATE FUNCTION statistics_init_double(double precision)
     RETURNS statistics
     AS 'MODULE_PATHNAME'
     LANGUAGE C IMMUTABLE STRICT;
-COMMENT ON FUNCTION statistics_init(double precision) IS 'Initialize statistics from a single value';
+CREATE FUNCTION statistics_init_numeric(numeric)
+    RETURNS statistics
+    AS 'MODULE_PATHNAME'
+    LANGUAGE C IMMUTABLE STRICT;
 
--- Cast from double precision to statistics
+-- Cast to statistics
 CREATE CAST (double precision AS statistics)
-    WITH FUNCTION statistics_init(double precision)
+    WITH FUNCTION statistics_init_double(double precision)
+    AS IMPLICIT;
+CREATE CAST (numeric AS statistics)
+    WITH FUNCTION statistics_init_numeric(numeric)
     AS IMPLICIT;
 
 --
