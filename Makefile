@@ -11,7 +11,7 @@ EXTVERSION = 0.1
 
 DATA = pg_track_optimizer--0.1.sql
 
-REGRESS = pg_track_optimizer interface join_filtering
+REGRESS = pg_track_optimizer interface join_filtering statistics
 
 ifdef USE_PGXS
 EXTRA_REGRESS_OPTS=--temp-config=$(CURDIR)/pg_track_optimizer.conf
