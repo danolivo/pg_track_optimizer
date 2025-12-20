@@ -78,52 +78,6 @@ CREATE OPERATOR + (
 );
 COMMENT ON OPERATOR + (statistics, double precision) IS 'Add a value to statistics';
 
---
--- Accessor functions
---
-
-CREATE FUNCTION stats_count(statistics)
-    RETURNS bigint
-    AS 'MODULE_PATHNAME', 'statistics_get_count'
-    LANGUAGE C IMMUTABLE STRICT;
-
-COMMENT ON FUNCTION stats_count(statistics) IS 'Get the count from statistics';
-
-CREATE FUNCTION stats_mean(statistics)
-    RETURNS double precision
-    AS 'MODULE_PATHNAME', 'statistics_get_mean'
-    LANGUAGE C IMMUTABLE STRICT;
-
-COMMENT ON FUNCTION stats_mean(statistics) IS 'Get the mean from statistics';
-
-CREATE FUNCTION stats_variance(statistics)
-    RETURNS double precision
-    AS 'MODULE_PATHNAME', 'statistics_get_variance'
-    LANGUAGE C IMMUTABLE STRICT;
-
-COMMENT ON FUNCTION stats_variance(statistics) IS 'Get the variance from statistics';
-
-CREATE FUNCTION stats_stddev(statistics)
-    RETURNS double precision
-    AS 'MODULE_PATHNAME', 'statistics_get_stddev'
-    LANGUAGE C IMMUTABLE STRICT;
-
-COMMENT ON FUNCTION stats_stddev(statistics) IS 'Get the standard deviation from statistics';
-
-CREATE FUNCTION stats_min(statistics)
-    RETURNS double precision
-    AS 'MODULE_PATHNAME', 'statistics_get_min'
-    LANGUAGE C IMMUTABLE STRICT;
-
-COMMENT ON FUNCTION stats_min(statistics) IS 'Get the minimum from statistics';
-
-CREATE FUNCTION stats_max(statistics)
-    RETURNS double precision
-    AS 'MODULE_PATHNAME', 'statistics_get_max'
-    LANGUAGE C IMMUTABLE STRICT;
-
-COMMENT ON FUNCTION stats_max(statistics) IS 'Get the maximum from statistics';
-
 -- Equality comparison operator
 CREATE FUNCTION statistics_eq(statistics, statistics)
     RETURNS boolean

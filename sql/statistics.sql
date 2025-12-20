@@ -28,12 +28,12 @@ UPDATE sensor_data SET measurements = measurements + 22.0 WHERE sensor_id = 2;
 -- NOTE: don't forget to stabilise output rounding double variables
 SELECT
     sensor_id,
-    stats_count(measurements) as count,
-    ROUND(stats_mean(measurements)::numeric, 2) as mean,
-    stats_min(measurements) as min,
-    stats_max(measurements) as max,
-    ROUND(stats_variance(measurements)::numeric, 2) as variance,
-    ROUND(stats_stddev(measurements)::numeric, 2) as stddev
+    measurements -> 'count' as count,
+    ROUND((measurements -> 'mean')::numeric, 2) as mean,
+    measurements -> 'min' as min,
+    measurements -> 'max' as max,
+    ROUND((measurements -> 'variance')::numeric, 2) as variance,
+    ROUND((measurements -> 'stddev')::numeric, 2) as stddev
 FROM sensor_data
 ORDER BY sensor_id;
 
@@ -58,15 +58,6 @@ SELECT sensor_id, measurements::text
 FROM sensor_data
 WHERE sensor_id <= 1
 ORDER BY sensor_id;
-
--- Test 9: Single value statistics (no variance)
-SELECT
-    stats_count(42.0::statistics) as count,
-    stats_mean(42.0::statistics) as mean,
-    stats_variance(42.0::statistics) as variance,
-    stats_stddev(42.0::statistics) as stddev,
-    stats_min(42.0::statistics) as min,
-    stats_max(42.0::statistics) as max;
 
 -- Test 10: Field accessor using -> operator
 SELECT

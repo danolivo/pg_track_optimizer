@@ -317,7 +317,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	counter = pg_atomic_read_u32(&shared->htab_counter);
 
 	if (counter == UINT32_MAX ||
-		counter > (uint32)(hash_mem / sizeof(DSMOptimizerTrackerEntry)))
+		counter > (uint32)(hash_mem * (Size) 1024 / sizeof(DSMOptimizerTrackerEntry)))
 	{
 		/* TODO: set status of full hash table */
 		return false;
