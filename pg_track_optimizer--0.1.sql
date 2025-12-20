@@ -118,6 +118,23 @@ CREATE FUNCTION stats_max(statistics)
 
 COMMENT ON FUNCTION stats_max(statistics) IS 'Get the maximum from statistics';
 
+-- Equality comparison operator
+CREATE FUNCTION statistics_eq(statistics, statistics)
+    RETURNS boolean
+    AS 'MODULE_PATHNAME', 'statistics_eq'
+    LANGUAGE C IMMUTABLE STRICT;
+
+COMMENT ON FUNCTION statistics_eq(statistics, statistics) IS 'Check equality of two statistics objects';
+
+CREATE OPERATOR = (
+    LEFTARG = statistics,
+    RIGHTARG = statistics,
+    FUNCTION = statistics_eq,
+    COMMUTATOR = =
+);
+
+COMMENT ON OPERATOR = (statistics, statistics) IS 'Equality operator for statistics type';
+
 CREATE FUNCTION pg_track_optimizer(
 	OUT dboid			Oid,
 	OUT queryid			bigint,
