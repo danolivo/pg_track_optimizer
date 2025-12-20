@@ -11,25 +11,7 @@
 #include "utils/builtins.h"
 #include <math.h>
 
-/*
- * Internal representation of statistics
- * Uses Welford's algorithm to maintain numerically stable running statistics
- * Fixed-size type (40 bytes) - no varlena header needed
- */
-typedef struct Statistics
-{
-    int64       count;          /* number of values */
-    double      mean;           /* running mean */
-    double      m2;             /* sum of squared differences from mean (for variance) */
-    double      min;            /* minimum value */
-    double      max;            /* maximum value */
-} Statistics;
-
-/* Macros for easier access */
-#define DatumGetStatisticsP(X)      ((Statistics *) DatumGetPointer(X))
-#define StatisticsPGetDatum(X)      PointerGetDatum(X)
-#define PG_GETARG_STATISTICS_P(n)   DatumGetStatisticsP(PG_GETARG_DATUM(n))
-#define PG_RETURN_STATISTICS_P(x)   return StatisticsPGetDatum(x)
+#include "statistics.h"
 
 /* Function declarations */
 PG_FUNCTION_INFO_V1(statistics_in);
@@ -389,4 +371,53 @@ statistics_get_field(PG_FUNCTION_ARGS)
 
     pfree(field_name);
     PG_RETURN_FLOAT8(result);
+}
+
+/*
+ * Internal function: Initialize a Statistics object from a single value
+ * This can be called directly from C code without going through the Datum interface
+ */
+void
+statistics_init_internal(Statistics *result, double value)
+{
+    result->count = 1;
+    result->mean = value;
+    result->m2 = 0.0;      /* No variance with single value */
+    result->min = value;
+    result->max = value;
+}
+
+/*
+ * Internal function: Add a value to existing statistics using Welford's algorithm
+ * This can be called directly from C code without going through the Datum interface
+ */
+void
+statistics_add_value(Statistics *stats, double value)
+{
+    double      delta, delta2;
+    int64       new_count;
+
+    /* Welford's algorithm for incremental mean and variance */
+    new_count = stats->count + 1;
+    delta = value - stats->mean;
+
+    stats->count = new_count;
+    stats->mean = stats->mean + delta / new_count;
+
+    delta2 = value - stats->mean;
+    stats->m2 = stats->m2 + delta * delta2;
+
+    /* Update min/max */
+    if (new_count == 1)
+    {
+        stats->min = value;
+        stats->max = value;
+    }
+    else
+    {
+        if (value < stats->min)
+            stats->min = value;
+        if (value > stats->max)
+            stats->max = value;
+    }
 }

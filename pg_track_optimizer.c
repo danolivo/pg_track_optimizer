@@ -344,16 +344,21 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 		entry->exec_time = 0.0;
 		entry->nexecs = 0;
-		entry->blks_accessed = 0;
+
+		/* Initialize buffer usage statistics with first value */
+		statistics_init_internal(&entry->blks_accessed, (double) ctx->blks_accessed);
+
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
+	}
+	else
+	{
+		/* Accumulate buffer usage statistics using Welford's algorithm */
+		statistics_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
 	}
 
 	/* Accumulate total execution time across all executions */
 	entry->exec_time += ctx->totaltime;
 	entry->nexecs++;
-
-	/* Accumulate buffer usage statistics across all executions */
-	entry->blks_accessed += ctx->blks_accessed;
 
 	dshash_release_lock(htab, entry);
 
@@ -631,7 +636,7 @@ static const DSMOptimizerTrackerEntry EOFEntry = {
 											.plan_nodes = -1,
 											.exec_time = -1.,
 											.nexecs = -1,
-											.blks_accessed = -1
+											.blks_accessed = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0}
 											};
 #define IsEOFEntry(entry) ( \
 	(entry)->key.dbOid == EOFEntry.key.dbOid && \
