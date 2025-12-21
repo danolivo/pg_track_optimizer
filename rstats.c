@@ -13,33 +13,41 @@
 
 #include <math.h>
 
-#include "statistics.h"
+#include "rstats.h"
 
 /* Function declarations */
-PG_FUNCTION_INFO_V1(statistics_in);
-PG_FUNCTION_INFO_V1(statistics_out);
-PG_FUNCTION_INFO_V1(statistics_recv);
-PG_FUNCTION_INFO_V1(statistics_send);
+PG_FUNCTION_INFO_V1(rstats_in);
+PG_FUNCTION_INFO_V1(rstats_out);
+PG_FUNCTION_INFO_V1(rstats_recv);
+PG_FUNCTION_INFO_V1(rstats_send);
 
-PG_FUNCTION_INFO_V1(statistics_init_double);
-PG_FUNCTION_INFO_V1(statistics_init_numeric);
+PG_FUNCTION_INFO_V1(rstats_init_double);
+PG_FUNCTION_INFO_V1(rstats_init_numeric);
 
-PG_FUNCTION_INFO_V1(statistics_add);
-PG_FUNCTION_INFO_V1(statistics_eq);
-PG_FUNCTION_INFO_V1(statistics_get_field);
+PG_FUNCTION_INFO_V1(rstats_add);
+PG_FUNCTION_INFO_V1(rstats_get_count);
+PG_FUNCTION_INFO_V1(rstats_get_mean);
+PG_FUNCTION_INFO_V1(rstats_get_variance);
+PG_FUNCTION_INFO_V1(rstats_get_stddev);
+PG_FUNCTION_INFO_V1(rstats_get_min);
+PG_FUNCTION_INFO_V1(rstats_get_max);
+PG_FUNCTION_INFO_V1(rstats_eq);
+PG_FUNCTION_INFO_V1(rstats_get_field);
+
 
 /*
  * Input function: converts text representation to internal format
  * Format: (count:N,mean:M,min:MIN,max:MAX,variance:V)
  */
 Datum
-statistics_in(PG_FUNCTION_ARGS)
+rstats_in(PG_FUNCTION_ARGS)
 {
 	char	   *str = PG_GETARG_CSTRING(0);
-	Statistics *result;
-	int64		count;
-	double		mean, min_val, max_val, variance;
-	int			nfields;
+	RStats *result;
+	int64	   count;
+	double	  mean, min_val, max_val, variance;
+	int		 nfields;
+
 
 	/* Parse the input string */
 	nfields = sscanf(str, "(count:"INT64_FORMAT",mean:%lf,min:%lf,max:%lf,variance:%lf)",
@@ -48,7 +56,7 @@ statistics_in(PG_FUNCTION_ARGS)
 	if (nfields != 5)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-				 errmsg("invalid input syntax for type statistics: \"%s\"", str),
+				 errmsg("invalid input syntax for type rstats: \"%s\"", str),
 				 errhint("Expected format: (count:N,mean:M,min:MIN,max:MAX,variance:V)")));
 
 	if (count < 0)
@@ -57,7 +65,7 @@ statistics_in(PG_FUNCTION_ARGS)
 				 errmsg("count must be non-negative")));
 
 	/* Allocate and initialize the result */
-	result = (Statistics *) palloc(sizeof(Statistics));
+	result = (RStats *) palloc(sizeof(RStats));
 
 	result->count = count;
 	result->mean = mean;
@@ -70,16 +78,16 @@ statistics_in(PG_FUNCTION_ARGS)
 	else
 		result->m2 = 0.0;
 
-	PG_RETURN_STATISTICS_P(result);
+	PG_RETURN_RSTATS_P(result);
 }
 
 /*
  * Output function: converts internal format to text representation
  */
 Datum
-statistics_out(PG_FUNCTION_ARGS)
+rstats_out(PG_FUNCTION_ARGS)
 {
-	Statistics *stats = PG_GETARG_STATISTICS_P(0);
+	RStats *stats = PG_GETARG_RSTATS_P(0);
 	char	   *result;
 	double	  variance;
 
@@ -99,12 +107,12 @@ statistics_out(PG_FUNCTION_ARGS)
  * Binary input function
  */
 Datum
-statistics_recv(PG_FUNCTION_ARGS)
+rstats_recv(PG_FUNCTION_ARGS)
 {
 	StringInfo  buf = (StringInfo) PG_GETARG_POINTER(0);
-	Statistics *result;
+	RStats *result;
 
-	result = (Statistics *) palloc(sizeof(Statistics));
+	result = (RStats *) palloc(sizeof(RStats));
 
 	result->count = pq_getmsgint64(buf);
 	result->mean = pq_getmsgfloat8(buf);
@@ -112,16 +120,16 @@ statistics_recv(PG_FUNCTION_ARGS)
 	result->min = pq_getmsgfloat8(buf);
 	result->max = pq_getmsgfloat8(buf);
 
-	PG_RETURN_STATISTICS_P(result);
+	PG_RETURN_RSTATS_P(result);
 }
 
 /*
  * Binary output function
  */
 Datum
-statistics_send(PG_FUNCTION_ARGS)
+rstats_send(PG_FUNCTION_ARGS)
 {
-	Statistics *stats = PG_GETARG_STATISTICS_P(0);
+	RStats *stats = PG_GETARG_RSTATS_P(0);
 	StringInfoData buf;
 
 	pq_begintypsend(&buf);
@@ -135,11 +143,11 @@ statistics_send(PG_FUNCTION_ARGS)
 }
 
 /*
- * Internal function: Initialize a Statistics object from a single value
+ * Internal function: Initialize a RStats object from a single value
  * This can be called directly from C code without going through the Datum interface
  */
 void
-statistics_init_internal(Statistics *result, double value)
+rstats_init_internal(RStats *result, double value)
 {
 	result->count = 1;
 	result->mean = value;
@@ -150,28 +158,28 @@ statistics_init_internal(Statistics *result, double value)
 
 /*
  * Initialize statistics from a single value
- * Usage: statistics_init_double(42.5) returns a statistics object with count=1
+ * Usage: rstats_init_double(42.5) returns a statistics object with count=1
  */
 Datum
-statistics_init_double(PG_FUNCTION_ARGS)
+rstats_init_double(PG_FUNCTION_ARGS)
 {
 	double	  value = PG_GETARG_FLOAT8(0);
-	Statistics *result;
+	RStats *result;
 
-	result = (Statistics *) palloc(sizeof(Statistics));
-	statistics_init_internal(result, value);
+	result = (RStats *) palloc(sizeof(RStats));
+	rstats_init_internal(result, value);
 
-	PG_RETURN_STATISTICS_P(result);
+	PG_RETURN_RSTATS_P(result);
 }
 
 Datum
-statistics_init_numeric(PG_FUNCTION_ARGS)
+rstats_init_numeric(PG_FUNCTION_ARGS)
 {
 	Numeric		num = PG_GETARG_NUMERIC(0);
 	char	   *tmp;
 	Datum		float_value;
 	double		value;
-	Statistics *result;
+	RStats *result;
 
 	/* Convert numeric to double */
 	tmp = DatumGetCString(DirectFunctionCall1(numeric_out,
@@ -180,10 +188,10 @@ statistics_init_numeric(PG_FUNCTION_ARGS)
 	pfree(tmp);
 	value = DatumGetFloat8(float_value);
 
-	result = (Statistics *) palloc(sizeof(Statistics));
-	statistics_init_internal(result, value);
+	result = (RStats *) palloc(sizeof(RStats));
+	rstats_init_internal(result, value);
 
-	PG_RETURN_STATISTICS_P(result);
+	PG_RETURN_RSTATS_P(result);
 }
 
 /*
@@ -191,7 +199,7 @@ statistics_init_numeric(PG_FUNCTION_ARGS)
  * This can be called directly from C code without going through the Datum interface
  */
 void
-statistics_add_value(Statistics *stats, double value)
+rstats_add_value(RStats *stats, double value)
 {
 	double	delta;
 	double	delta2;
@@ -227,25 +235,89 @@ statistics_add_value(Statistics *stats, double value)
  * Usage: stats + 42.5 returns updated statistics
  */
 Datum
-statistics_add(PG_FUNCTION_ARGS)
+rstats_add(PG_FUNCTION_ARGS)
 {
-	Statistics *stats = PG_GETARG_STATISTICS_P(0);
+	RStats *stats = PG_GETARG_RSTATS_P(0);
 	double		value = PG_GETARG_FLOAT8(1);
 
-	statistics_add_value(stats, value);
+	rstats_add_value(stats, value);
 
-	PG_RETURN_STATISTICS_P(stats);
+	PG_RETURN_RSTATS_P(stats);
 }
 
 /*
+ * Accessor functions to get individual statistics
+ */
+
+Datum
+rstats_get_count(PG_FUNCTION_ARGS)
+{
+	RStats *stats = PG_GETARG_RSTATS_P(0);
+	PG_RETURN_INT64(stats->count);
+}
+
+Datum
+rstats_get_mean(PG_FUNCTION_ARGS)
+{
+	RStats *stats = PG_GETARG_RSTATS_P(0);
+	PG_RETURN_FLOAT8(stats->mean);
+}
+
+Datum
+rstats_get_variance(PG_FUNCTION_ARGS)
+{
+	RStats *stats = PG_GETARG_RSTATS_P(0);
+	double	  variance;
+
+	if (stats->count > 1)
+		variance = stats->m2 / (stats->count - 1);
+	else
+		variance = 0.0;
+
+	PG_RETURN_FLOAT8(variance);
+}
+
+Datum
+rstats_get_stddev(PG_FUNCTION_ARGS)
+{
+	RStats *stats = PG_GETARG_RSTATS_P(0);
+	double	  variance, stddev;
+
+	if (stats->count > 1)
+	{
+		variance = stats->m2 / (stats->count - 1);
+		stddev = sqrt(variance);
+	}
+	else
+		stddev = 0.0;
+
+	PG_RETURN_FLOAT8(stddev);
+}
+
+Datum
+rstats_get_min(PG_FUNCTION_ARGS)
+{
+	RStats *stats = PG_GETARG_RSTATS_P(0);
+	PG_RETURN_FLOAT8(stats->min);
+}
+
+Datum
+rstats_get_max(PG_FUNCTION_ARGS)
+{
+	RStats *stats = PG_GETARG_RSTATS_P(0);
+	PG_RETURN_FLOAT8(stats->max);
+}
+
+/*
+
  * Equality comparison for statistics type
  * Two statistics objects are equal if all their fields match
  */
 Datum
-statistics_eq(PG_FUNCTION_ARGS)
+rstats_eq(PG_FUNCTION_ARGS)
 {
-	Statistics *stats1 = PG_GETARG_STATISTICS_P(0);
-	Statistics *stats2 = PG_GETARG_STATISTICS_P(1);
+	RStats *stats1 = PG_GETARG_RSTATS_P(0);
+	RStats *stats2 = PG_GETARG_RSTATS_P(1);
 
 	/* Compare all fields for equality */
 	if (stats1->count != stats2->count)
@@ -272,9 +344,9 @@ statistics_eq(PG_FUNCTION_ARGS)
  * Supported fields: count, mean, variance, stddev, min, max
  */
 Datum
-statistics_get_field(PG_FUNCTION_ARGS)
+rstats_get_field(PG_FUNCTION_ARGS)
 {
-	Statistics *stats = PG_GETARG_STATISTICS_P(0);
+	RStats *stats = PG_GETARG_RSTATS_P(0);
 	text	   *field_text = PG_GETARG_TEXT_PP(1);
 	char	   *field_name;
 	double	  result;
