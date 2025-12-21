@@ -34,7 +34,7 @@
 #include "utils/guc.h"
 
 #include "plan_error.h"
-#include "statistics.h"
+#include "rstats.h"
 
 PG_MODULE_MAGIC;
 
@@ -86,7 +86,7 @@ typedef struct DSMOptimizerTrackerEntry
 	int64					nexecs; /* Number of executions taken into account */
 
 	/* Buffer usage statistics - accumulated across all executions */
-	Statistics				blks_accessed;	/* Sum of all block hits, reads, and writes */
+	RStats				blks_accessed;	/* Sum of all block hits, reads, and writes */
 } DSMOptimizerTrackerEntry;
 
 static const dshash_parameters dsh_params = {
@@ -349,14 +349,14 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		entry->nexecs = 0;
 
 		/* Initialize buffer usage statistics with first value */
-		statistics_init_internal(&entry->blks_accessed, (double) ctx->blks_accessed);
+		rstats_init_internal(&entry->blks_accessed, (double) ctx->blks_accessed);
 
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
 	}
 	else
 	{
 		/* Accumulate buffer usage statistics using Welford's algorithm */
-		statistics_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
+		rstats_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
 	}
 
 	/* Accumulate total execution time across all executions */

@@ -3,7 +3,7 @@
 MODULE_big = pg_track_optimizer
 OBJS = \
 	$(WIN32RES) \
-	pg_track_optimizer.o plan_error.o statistics.o
+	pg_track_optimizer.o plan_error.o rstats.o
 PGFILEDESC = "pg_track_optimizer - track planning decisions"
 
 EXTENSION = pg_track_optimizer
@@ -11,7 +11,7 @@ EXTVERSION = 0.1
 
 DATA = pg_track_optimizer--0.1.sql
 
-REGRESS = pg_track_optimizer interface join_filtering statistics
+REGRESS = pg_track_optimizer interface join_filtering rstats
 
 ifdef USE_PGXS
 EXTRA_REGRESS_OPTS=--temp-config=$(CURDIR)/pg_track_optimizer.conf

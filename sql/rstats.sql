@@ -1,37 +1,37 @@
--- Test statistics base type
+-- Test rstats base type
 CREATE EXTENSION pg_track_optimizer;
 
--- Test 1: Basic statistics creation and initialization
-SELECT 42.5::statistics;
-SELECT (42.1::double precision)::statistics;
-SELECT (NULL::double precision)::statistics;
+-- Test 1: Basic rstats creation and initialization
+SELECT 42.5::rstats;
+SELECT (42.1::double precision)::rstats;
+SELECT (NULL::double precision)::rstats;
 
 SELECT q.s, q.s + 1.0, q.s + 2.0, q.s + NULL
-  FROM (VALUES (1.0::statistics)) AS q(s);
-SELECT q.s, q.s + 1.0, q.s + NULL FROM (VALUES (NULL::statistics)) AS q(s);
+  FROM (VALUES (1.0::rstats)) AS q(s);
+SELECT q.s, q.s + 1.0, q.s + NULL FROM (VALUES (NULL::rstats)) AS q(s);
 SELECT q.s, q.s + 1.0 FROM
-  (VALUES (('+Infinity'::double precision)::statistics)) AS q(s);
+  (VALUES (('+Infinity'::double precision)::rstats)) AS q(s);
 
--- Test 2: Create table with statistics column
+-- Test 2: Create table with rstats column
 CREATE TABLE sensor_data (
   sensor_id integer,
-  measurements statistics
+  measurements rstats
 );
 
--- Test 3: Insert initial statistics values
+-- Test 3: Insert initial rstats values
 INSERT INTO sensor_data VALUES
-  (1, 10.0::statistics), (2, 20.0::statistics), (3, 15.5::statistics);
+  (1, 10.0::rstats), (2, 20.0::rstats), (3, 15.5::rstats);
 
--- Test 4: Add values to statistics using the + operator
+-- Test 4: Add values to rstats using the + operator
 UPDATE sensor_data SET measurements = measurements + 20.0 WHERE sensor_id = 1;
 UPDATE sensor_data SET measurements = measurements + 25.0 WHERE sensor_id = 2;
 UPDATE sensor_data SET measurements = measurements + 18.5 WHERE sensor_id = 3;
 
--- Add more values to build up statistics
+-- Add more values to build up rstats
 UPDATE sensor_data SET measurements = measurements + 30.0 WHERE sensor_id = 1;
 UPDATE sensor_data SET measurements = measurements + 22.0 WHERE sensor_id = 2;
 
--- Test 5: Query statistics properties
+-- Test 5: Query rstats properties
 -- NOTE: don't forget to stabilise output rounding double variables
 SELECT
     sensor_id,
@@ -45,15 +45,15 @@ FROM sensor_data
 ORDER BY sensor_id;
 
 -- Test 6: Equality comparison
--- Create two identical statistics
-SELECT (10.0::statistics + 20.0 + 30.0) = (10.0::statistics + 20.0 + 30.0) as equal_stats;
+-- Create two identical rstats
+SELECT (10.0::rstats + 20.0 + 30.0) = (10.0::rstats + 20.0 + 30.0) as equal_stats;
 
--- Create two different statistics
-SELECT (10.0::statistics + 20.0) = (15.0::statistics + 15.0) as different_stats;
+-- Create two different rstats
+SELECT (10.0::rstats + 20.0) = (15.0::rstats + 15.0) as different_stats;
 
--- Test 7: Compare statistics in table
-INSERT INTO sensor_data VALUES (4, 10.0::statistics + 11.0 + 12.0);
-INSERT INTO sensor_data VALUES (5, 10.0::statistics + 11.0 + 12.0);
+-- Test 7: Compare rstats in table
+INSERT INTO sensor_data VALUES (4, 10.0::rstats + 11.0 + 12.0);
+INSERT INTO sensor_data VALUES (5, 10.0::rstats + 11.0 + 12.0);
 
 SELECT s1.sensor_id as sensor1, s2.sensor_id as sensor2,
        s1.measurements = s2.measurements as are_equal
