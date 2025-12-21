@@ -199,7 +199,7 @@ jobs:
             evaluated_nodes,
             plan_nodes,
             ROUND(exec_time::numeric, 2) as exec_time_ms,
-            blks_accessed,
+            blks_avg,blks_min,blks_max,blks_cnt,blks_dev,
             nexecs
           FROM pg_track_optimizer
           ORDER BY avg_error DESC
@@ -215,10 +215,10 @@ jobs:
         # Execute the benchmark query and save to temp file
         psql -d jobench -c "
           WITH
-            top_avg AS (SELECT queryid FROM pg_track_optimizer() ORDER BY avg_error DESC LIMIT 10),
-            top_rms AS (SELECT queryid FROM pg_track_optimizer() ORDER BY rms_error DESC LIMIT 10),
-            top_twa AS (SELECT queryid FROM pg_track_optimizer() ORDER BY twa_error DESC LIMIT 10),
-            top_wca AS (SELECT queryid FROM pg_track_optimizer() ORDER BY wca_error DESC LIMIT 10),
+            top_avg AS (SELECT queryid FROM pg_track_optimizer ORDER BY avg_error DESC LIMIT 10),
+            top_rms AS (SELECT queryid FROM pg_track_optimizer ORDER BY rms_error DESC LIMIT 10),
+            top_twa AS (SELECT queryid FROM pg_track_optimizer ORDER BY twa_error DESC LIMIT 10),
+            top_wca AS (SELECT queryid FROM pg_track_optimizer ORDER BY wca_error DESC LIMIT 10),
             intersection AS (
               SELECT queryid FROM top_avg
               INTERSECT

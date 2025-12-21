@@ -2,20 +2,20 @@
 CREATE EXTENSION pg_track_optimizer;
 -- Test 1: Basic rstats creation and initialization
 SELECT 42.5::rstats;
-                    rstats                    
+                      rstats                      
 --------------------------------------------------
  (count:1,mean:42.5,min:42.5,max:42.5,variance:0)
 (1 row)
 
 SELECT (42.1::double precision)::rstats;
-                    rstats                    
+                      rstats                      
 --------------------------------------------------
  (count:1,mean:42.1,min:42.1,max:42.1,variance:0)
 (1 row)
 
 SELECT (NULL::double precision)::rstats;
  rstats 
-------------
+--------
  
 (1 row)
 
