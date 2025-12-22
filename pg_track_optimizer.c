@@ -56,6 +56,7 @@ typedef struct TODSMRegistry
 	dsa_handle			dsah;
 	dshash_table_handle	dshh;
 
+	/* Use it to calculate the number of records in the shared HTAB */
 	pg_atomic_uint32	htab_counter;
 } TODSMRegistry;
 
@@ -86,7 +87,7 @@ typedef struct DSMOptimizerTrackerEntry
 	int64					nexecs; /* Number of executions taken into account */
 
 	/* Buffer usage statistics - accumulated across all executions */
-	RStats				blks_accessed;	/* Sum of all block hits, reads, and writes */
+	RStats					blks_accessed;	/* Sum of all block hits, reads, and writes */
 } DSMOptimizerTrackerEntry;
 
 static const dshash_parameters dsh_params = {
@@ -327,11 +328,17 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	key.dbOid = MyDatabaseId;
 	key.queryId = queryDesc->plannedstmt->queryId;
 	entry = dshash_find_or_insert(htab, &key, &found);
+
+	/*
+	 * Just for the reference - per-execution values. It would be interesting
+	 * to make them also cumulative statistics.
+	 */
+	entry->evaluated_nodes = ctx->nnodes;
+	entry->plan_nodes = ctx->counter;
+
 	entry->avg_error = ctx->avg_error;
 	entry->rms_error = ctx->rms_error;
 	entry->twa_error = ctx->twa_error;
-	entry->evaluated_nodes = ctx->nnodes;
-	entry->plan_nodes = ctx->counter;
 
 	if (!found)
 	{
@@ -344,23 +351,24 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		strptr = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
 		strlcpy(strptr, queryDesc->sourceText, len + 1);
 
+		/* Init cumulative statistics' fields */
+		rstats_set_empty(&entry->wca_error);
+		rstats_set_empty(&entry->blks_accessed);
+
 		entry->exec_time = 0.0;
 		entry->nexecs = 0;
 
-		/* Initialize wca_error and buffer usage statistics with first value */
-		rstats_init_internal(&entry->wca_error, ctx->wca_error);
-		rstats_init_internal(&entry->blks_accessed, (double) ctx->blks_accessed);
-
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
 	}
-	else
-	{
-		/* Accumulate wca_error and buffer usage statistics using Welford's algorithm */
-		rstats_add_value(&entry->wca_error, ctx->wca_error);
-		rstats_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
-	}
 
-	/* Accumulate total execution time across all executions */
+	/* Accumulate statistics. Consider only physically meaningful one */
+	if (ctx->wca_error >= 0.)
+		rstats_add_value(&entry->wca_error, ctx->wca_error);
+	Assert(ctx->blks_accessed >= 0);
+	rstats_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
+
+	/* Accumulate 'total' fields */
+	Assert(ctx->totaltime >= 0.);
 	entry->exec_time += ctx->totaltime;
 	entry->nexecs++;
 
@@ -515,11 +523,11 @@ _init_rsinfo(PG_FUNCTION_ARGS, ReturnSetInfo *rsinfo, int total_ncols)
 	MemoryContextSwitchTo(oldcontext);
 }
 
-PG_FUNCTION_INFO_V1(to_show_data);
+PG_FUNCTION_INFO_V1(pg_track_optimizer);
 PG_FUNCTION_INFO_V1(to_reset);
 
 Datum
-to_show_data(PG_FUNCTION_ARGS)
+pg_track_optimizer(PG_FUNCTION_ARGS)
 {
 	ReturnSetInfo			   *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	Datum						values[DATATBL_NCOLS];
@@ -550,15 +558,20 @@ to_show_data(PG_FUNCTION_ARGS)
 		str = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
 		values[i++] = CStringGetTextDatum(str);
 
+		/* Fill-in reference statistics fields */
 		values[i++] = Float8GetDatum(entry->avg_error);
 		values[i++] = Float8GetDatum(entry->rms_error);
 		values[i++] = Float8GetDatum(entry->twa_error);
-		values[i++] = PointerGetDatum((void *) &entry->wca_error);
+
+		/* Fill-in cumulative statistics fields */
+		values[i++] = RStatsPGetDatum(&entry->wca_error);
+		values[i++] = RStatsPGetDatum(&entry->blks_accessed);
+
 		values[i++] = Int32GetDatum(entry->evaluated_nodes);
 		values[i++] = Int32GetDatum(entry->plan_nodes);
 		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
 		values[i++] = Int64GetDatum(entry->nexecs);
-		values[i++] = PointerGetDatum((void *) &entry->blks_accessed);
+
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 		Assert(i == DATATBL_NCOLS);
 	}
@@ -576,6 +589,7 @@ to_reset(PG_FUNCTION_ARGS)
 {
 	dshash_seq_status			stat;
 	DSMOptimizerTrackerEntry   *entry;
+	uint32						pre = 1;
 
 	track_attach_shmem();
 
@@ -589,8 +603,6 @@ to_reset(PG_FUNCTION_ARGS)
 	dshash_seq_init(&stat, htab, true);
 	while ((entry = dshash_seq_next(&stat)) != NULL)
 	{
-		uint32 pre;
-
 		Assert(entry->key.queryId != UINT64CONST(0) &&
 			   OidIsValid(entry->key.dbOid));
 
@@ -608,6 +620,8 @@ to_reset(PG_FUNCTION_ARGS)
 		}
 	}
 	dshash_seq_term(&stat);
+
+	Assert(pre == 1);
 
 	/* Clean disk storage too */
 	(void) _flush_hash_table();

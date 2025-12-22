@@ -1,27 +1,27 @@
 CREATE EXTENSION pg_track_optimizer;
 \d pg_track_optimizer
                   View "public.pg_track_optimizer"
-     Column      |       Type       | Collation | Nullable | Default
+     Column      |       Type       | Collation | Nullable | Default 
 -----------------+------------------+-----------+----------+---------
- queryid         | bigint           |           |          |
- query           | text             |           |          |
- avg_error       | double precision |           |          |
- rms_error       | double precision |           |          |
- twa_error       | double precision |           |          |
- wca_min         | double precision |           |          |
- wca_max         | double precision |           |          |
- wca_cnt         | double precision |           |          |
- wca_avg         | double precision |           |          |
- wca_dev         | double precision |           |          |
- evaluated_nodes | integer          |           |          |
- plan_nodes      | integer          |           |          |
- exec_time       | double precision |           |          |
- nexecs          | bigint           |           |          |
- blks_min        | double precision |           |          |
- blks_max        | double precision |           |          |
- blks_cnt        | double precision |           |          |
- blks_avg        | double precision |           |          |
+ queryid         | bigint           |           |          | 
+ query           | text             |           |          | 
+ avg_error       | double precision |           |          | 
+ rms_error       | double precision |           |          | 
+ twa_error       | double precision |           |          | 
+ wca_min         | double precision |           |          | 
+ wca_max         | double precision |           |          | 
+ wca_cnt         | double precision |           |          | 
+ wca_avg         | double precision |           |          | 
+ wca_dev         | double precision |           |          | 
+ blks_min        | double precision |           |          | 
+ blks_max        | double precision |           |          | 
+ blks_cnt        | double precision |           |          | 
+ blks_avg        | double precision |           |          | 
  blks_dev        | double precision |           |          | 
+ evaluated_nodes | integer          |           |          | 
+ plan_nodes      | integer          |           |          | 
+ exec_time       | double precision |           |          | 
+ nexecs          | bigint           |           |          | 
 
 \df pg_track_optimizer_flush
                                  List of functions
