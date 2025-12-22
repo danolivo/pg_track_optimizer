@@ -78,7 +78,7 @@ typedef struct DSMOptimizerTrackerEntry
 	double					avg_error;
 	double					rms_error;
 	double					twa_error;
-	double					wca_error;
+	RStats					wca_error;	/* Cost-Weighted Average error - accumulated as running statistics */
 	dsa_pointer				query_ptr;
 	int32					evaluated_nodes;
 	int32					plan_nodes;
@@ -330,7 +330,6 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	entry->avg_error = ctx->avg_error;
 	entry->rms_error = ctx->rms_error;
 	entry->twa_error = ctx->twa_error;
-	entry->wca_error = ctx->wca_error;
 	entry->evaluated_nodes = ctx->nnodes;
 	entry->plan_nodes = ctx->counter;
 
@@ -348,14 +347,16 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		entry->exec_time = 0.0;
 		entry->nexecs = 0;
 
-		/* Initialize buffer usage statistics with first value */
+		/* Initialize wca_error and buffer usage statistics with first value */
+		rstats_init_internal(&entry->wca_error, ctx->wca_error);
 		rstats_init_internal(&entry->blks_accessed, (double) ctx->blks_accessed);
 
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
 	}
 	else
 	{
-		/* Accumulate buffer usage statistics using Welford's algorithm */
+		/* Accumulate wca_error and buffer usage statistics using Welford's algorithm */
+		rstats_add_value(&entry->wca_error, ctx->wca_error);
 		rstats_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
 	}
 
@@ -552,7 +553,7 @@ to_show_data(PG_FUNCTION_ARGS)
 		values[i++] = Float8GetDatum(entry->avg_error);
 		values[i++] = Float8GetDatum(entry->rms_error);
 		values[i++] = Float8GetDatum(entry->twa_error);
-		values[i++] = Float8GetDatum(entry->wca_error);
+		values[i++] = PointerGetDatum((void *) &entry->wca_error);
 		values[i++] = Int32GetDatum(entry->evaluated_nodes);
 		values[i++] = Int32GetDatum(entry->plan_nodes);
 		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
@@ -633,7 +634,7 @@ static const DSMOptimizerTrackerEntry EOFEntry = {
 											.avg_error = -2.,
 											.rms_error = -2.,
 											.twa_error = -2.,
-											.wca_error = -2.,
+											.wca_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
 											.query_ptr = 0,
 											.evaluated_nodes = -1,
 											.plan_nodes = -1,
@@ -826,11 +827,12 @@ _load_hash_table(TODSMRegistry *state)
 		entry->avg_error = disk_entry.avg_error;
 		entry->rms_error = disk_entry.rms_error;
 		entry->twa_error = disk_entry.twa_error;
-		entry->wca_error = disk_entry.wca_error;
+		memcpy(&entry->wca_error, &disk_entry.wca_error, sizeof(RStats));
 		entry->evaluated_nodes = disk_entry.evaluated_nodes;
 		entry->plan_nodes = disk_entry.plan_nodes;
 		entry->exec_time = disk_entry.exec_time;
 		entry->nexecs = disk_entry.nexecs;
+		memcpy(&entry->blks_accessed, &disk_entry.blks_accessed, sizeof(RStats));
 		entry->query_ptr = disk_entry.query_ptr;
 
 		dshash_release_lock(htab, entry);

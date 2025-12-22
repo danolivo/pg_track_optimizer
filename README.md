@@ -142,18 +142,18 @@ LIMIT 10;
 - **avg_error**: Simple average of log-scale errors across plan nodes
 - **rms_error**: Root Mean Square (RMS) error - emphasises large estimation errors
 - **twa_error**: Time-Weighted Average (TWA) error - highlights estimation errors in time-consuming nodes
-- **wca_error**: Cost-Weighted Average (WCA) error - highlights estimation errors in nodes the planner considered expensive
+- **wca_error**: Cost-Weighted Average (WCA) error per execution (rstats type). Tracks running statistics of WCA error values across query executions. The view exposes this as `wca_min`, `wca_max`, `wca_cnt`, `wca_avg`, and `wca_dev` columns. Use the `->` operator on the raw function output to access fields: `wca_error -> 'mean'`, `wca_error -> 'stddev'`, etc.
 - **evaluated_nodes**: Number of plan nodes analysed
 - **plan_nodes**: Total plan nodes (some may be skipped, e.g., never-executed branches)
 - **exec_time**: Total execution time across all executions (milliseconds). Divide by `nexecs` to get average per execution
 - **nexecs**: Number of times the query was executed
-- **blks_accessed**: Running statistics of blocks accessed per execution (rstats type). Tracks count, mean, variance, standard deviation, min, and max of total blocks (shared + local + temporary) accessed in each query execution. Use `->` operator to access fields: `blks_accessed -> 'mean'`, `blks_accessed -> 'stddev'`, etc.
+- **blks_accessed**: Running statistics of blocks accessed per execution (rstats type). The view exposes this as `blks_min`, `blks_max`, `blks_cnt`, `blks_avg`, and `blks_dev` columns. Use the `->` operator on the raw function output to access fields: `blks_accessed -> 'mean'`, `blks_accessed -> 'stddev'`, etc.
 
-> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, and `blks_accessed` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
+> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `wca_error`, and `blks_accessed` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
 
 ### The rstats Type
 
-The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability. It's used for the `blks_accessed` column to provide detailed statistics about block access patterns.
+The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability. It's used for the `wca_error` and `blks_accessed` columns to provide detailed statistics about cost-weighted errors and block access patterns across multiple query executions.
 
 **Fields accessible via the `->` operator:**
 - `count`: Number of observations
@@ -165,16 +165,26 @@ The `rstats` type is a custom PostgreSQL type for tracking running statistics us
 
 **Example usage:**
 ```sql
--- Get average blocks accessed per execution for queries
+-- Get average blocks accessed and WCA error statistics per execution
 SELECT queryid,
+       wca_error -> 'mean' as avg_wca_error,
+       wca_error -> 'stddev' as stddev_wca_error,
        blks_accessed -> 'mean' as avg_blocks,
        blks_accessed -> 'stddev' as stddev_blocks
-FROM pg_track_optimizer
+FROM pg_track_optimizer()
 WHERE blks_accessed -> 'mean' > 1000
-ORDER BY blks_accessed -> 'mean' DESC;
+ORDER BY wca_error -> 'mean' DESC;
+
+-- Use the view to get pre-calculated statistics
+SELECT queryid, query,
+       wca_avg, wca_dev, wca_min, wca_max,
+       blks_avg, blks_dev
+FROM pg_track_optimizer
+WHERE wca_avg > 2.0
+ORDER BY wca_avg DESC;
 ```
 
-The rstats type maintains numerically stable incremental statistics, automatically updating mean, variance, min, and max as new values are accumulated. This provides richer statistical insight than simple totals or averages.
+The rstats type maintains numerically stable incremental statistics, automatically updating mean, variance, min, and max as new values are accumulated. This provides richer statistical insight than simple totals or averages, especially useful for understanding the variability in query performance and cardinality estimation across multiple executions.
 
 ### Managing Statistics
 
