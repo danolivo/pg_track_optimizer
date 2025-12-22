@@ -1,11 +1,12 @@
 /*
- * stat_type.c - base type for incremental statistics type
+ * rstats.c - base type for incremental statistics type
  *
  * This implements a 'statistics' base type that maintains
  * running statistics using Welford's algorithm for numerical stability.
  */
 
 #include "postgres.h"
+
 #include "fmgr.h"
 #include "libpq/pqformat.h"
 #include "utils/builtins.h"
@@ -21,6 +22,7 @@ PG_FUNCTION_INFO_V1(rstats_out);
 PG_FUNCTION_INFO_V1(rstats_recv);
 PG_FUNCTION_INFO_V1(rstats_send);
 
+PG_FUNCTION_INFO_V1(rstats_empty_constructor);
 PG_FUNCTION_INFO_V1(rstats_init_double);
 PG_FUNCTION_INFO_V1(rstats_init_numeric);
 
@@ -42,11 +44,11 @@ PG_FUNCTION_INFO_V1(rstats_get_field);
 Datum
 rstats_in(PG_FUNCTION_ARGS)
 {
-	char	   *str = PG_GETARG_CSTRING(0);
+	char   *str = PG_GETARG_CSTRING(0);
 	RStats *result;
-	int64	   count;
-	double	  mean, min_val, max_val, variance;
-	int		 nfields;
+	int64	count;
+	double	mean, min_val, max_val, variance;
+	int		nfields;
 
 
 	/* Parse the input string */
@@ -88,8 +90,8 @@ Datum
 rstats_out(PG_FUNCTION_ARGS)
 {
 	RStats *stats = PG_GETARG_RSTATS_P(0);
-	char	   *result;
-	double	  variance;
+	char   *result;
+	double	variance;
 
 	/* Calculate variance from m2 */
 	if (stats->count > 1)
@@ -142,6 +144,29 @@ rstats_send(PG_FUNCTION_ARGS)
 	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
 }
 
+void
+rstats_set_empty(RStats *result)
+{
+	result->count = 0;
+
+	/* Arbitrary value, just to check it later */
+	result->mean = -1.;
+	result->m2 = -1.;
+	result->min = -1.;
+	result->max = -1.;
+}
+
+Datum
+rstats_empty_constructor(PG_FUNCTION_ARGS)
+{
+	RStats *result;
+
+	result = (RStats *) palloc(sizeof(RStats));
+	rstats_set_empty(result);
+
+	PG_RETURN_POINTER(result);
+}
+
 /*
  * Internal function: Initialize a RStats object from a single value
  * This can be called directly from C code without going through the Datum interface
@@ -149,6 +174,8 @@ rstats_send(PG_FUNCTION_ARGS)
 void
 rstats_init_internal(RStats *result, double value)
 {
+	rstats_set_empty(result);
+
 	result->count = 1;
 	result->mean = value;
 	result->m2 = 0.0;	  /* No variance with single value */
@@ -163,8 +190,8 @@ rstats_init_internal(RStats *result, double value)
 Datum
 rstats_init_double(PG_FUNCTION_ARGS)
 {
-	double	  value = PG_GETARG_FLOAT8(0);
-	RStats *result;
+	double		value = PG_GETARG_FLOAT8(0);
+	RStats	   *result;
 
 	result = (RStats *) palloc(sizeof(RStats));
 	rstats_init_internal(result, value);
@@ -199,35 +226,32 @@ rstats_init_numeric(PG_FUNCTION_ARGS)
  * This can be called directly from C code without going through the Datum interface
  */
 void
-rstats_add_value(RStats *stats, double value)
+rstats_add_value(RStats *rstats, double value)
 {
 	double	delta;
 	double	delta2;
 	int64	new_count;
 
+	if (rstats_is_empty(rstats))
+	{
+		rstats_init_internal(rstats, value);
+		return;
+	}
+
 	/* Welford's algorithm for incremental mean and variance */
-	new_count = stats->count + 1;
-	delta = value - stats->mean;
+	new_count = rstats->count + 1;
+	delta = value - rstats->mean;
 
-	stats->count = new_count;
-	stats->mean = stats->mean + delta / new_count;
+	rstats->count = new_count;
+	rstats->mean = rstats->mean + delta / new_count;
 
-	delta2 = value - stats->mean;
-	stats->m2 = stats->m2 + delta * delta2;
+	delta2 = value - rstats->mean;
+	rstats->m2 = rstats->m2 + delta * delta2;
 
-	/* Update min/max */
-	if (new_count == 1)
-	{
-		stats->min = value;
-		stats->max = value;
-	}
-	else
-	{
-		if (value < stats->min)
-			stats->min = value;
-		if (value > stats->max)
-			stats->max = value;
-	}
+	if (value < rstats->min)
+		rstats->min = value;
+	if (value > rstats->max)
+		rstats->max = value;
 }
 
 /*
@@ -238,11 +262,30 @@ Datum
 rstats_add(PG_FUNCTION_ARGS)
 {
 	RStats *stats = PG_GETARG_RSTATS_P(0);
-	double		value = PG_GETARG_FLOAT8(1);
+	double	value = PG_GETARG_FLOAT8(1);
 
 	rstats_add_value(stats, value);
 
 	PG_RETURN_RSTATS_P(stats);
+}
+
+/*
+ * Utility function to check if running statistics value is empty
+ */
+bool
+rstats_is_empty(RStats *value)
+{
+	if (value->count > 0)
+		return false;
+
+	/* Empty value. Check to ensure it is not a freed memory block */
+	Assert(value->count == 0);
+	Assert(value->mean == -1.);
+	Assert(value->m2 = -1.);
+	Assert(value->min = -1.);
+	Assert(value->max = -1.);
+
+	return true;
 }
 
 /*
@@ -267,7 +310,7 @@ Datum
 rstats_get_variance(PG_FUNCTION_ARGS)
 {
 	RStats *stats = PG_GETARG_RSTATS_P(0);
-	double	  variance;
+	double	variance;
 
 	if (stats->count > 1)
 		variance = stats->m2 / (stats->count - 1);
@@ -281,7 +324,7 @@ Datum
 rstats_get_stddev(PG_FUNCTION_ARGS)
 {
 	RStats *stats = PG_GETARG_RSTATS_P(0);
-	double	  variance, stddev;
+	double	variance, stddev;
 
 	if (stats->count > 1)
 	{
@@ -347,9 +390,9 @@ Datum
 rstats_get_field(PG_FUNCTION_ARGS)
 {
 	RStats *stats = PG_GETARG_RSTATS_P(0);
-	text	   *field_text = PG_GETARG_TEXT_PP(1);
-	char	   *field_name;
-	double	  result;
+	text   *field_text = PG_GETARG_TEXT_PP(1);
+	char   *field_name;
+	double	result;
 
 	/* Convert text to C string */
 	field_name = text_to_cstring(field_text);
