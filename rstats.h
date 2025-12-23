@@ -12,17 +12,23 @@
 #include "postgres.h"
 
 /*
- * Internal representation of statistics
- * Uses Welford's algorithm to maintain numerically stable running statistics
- * Fixed-size type (40 bytes) - no varlena header needed
+ * Internal representation of running statistics
+ *
+ * Uses Welford's algorithm to maintain numerically stable running statistics.
+ * This algorithm computes mean and variance in a single pass with excellent
+ * numerical stability, avoiding catastrophic cancellation errors.
+ *
+ * Fixed-size type (40 bytes) - no varlena header needed.
+ *
+ * Empty state: count=0, other fields=-1 (sentinel values for validation)
  */
 typedef struct RStats
 {
-	int64	count;	/* number of values */
-	double	mean;	/* running mean */
-	double	m2;		/* sum of squared differences from mean (for variance) */
-	double	min;	/* minimum value */
-	double	max;	/* maximum value */
+	int64	count;	/* number of values accumulated */
+	double	mean;	/* running mean (arithmetic average) */
+	double	m2;		/* sum of squared differences from mean (for variance calculation) */
+	double	min;	/* minimum value observed */
+	double	max;	/* maximum value observed */
 } RStats;
 
 /* Macros for easier access */
@@ -39,10 +45,14 @@ typedef struct RStats
 /* Initialize a RStats object from a single value */
 extern void rstats_init_internal(RStats *result, double value);
 
-/* Add a value to existing statistics using Welford's algorithm */
+/* Add a value to existing statistics using Welford's algorithm.
+ * Automatically initializes if called on an empty RStats object. */
 extern void rstats_add_value(RStats *stats, double value);
 
+/* Check if RStats is in empty (uninitialized) state */
 extern bool rstats_is_empty(RStats *result);
+
+/* Set RStats to empty state with sentinel values */
 extern void rstats_set_empty(RStats *result);
 
 #endif /* RSTATS_H */

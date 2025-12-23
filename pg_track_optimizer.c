@@ -56,7 +56,11 @@ typedef struct TODSMRegistry
 	dsa_handle			dsah;
 	dshash_table_handle	dshh;
 
-	/* Use it to calculate the number of records in the shared HTAB */
+	/*
+	 * Atomic counter tracking the number of entries in the hash table.
+	 * Used to enforce memory limits without scanning the entire table.
+	 * Incremented on insert, decremented on delete.
+	 */
 	pg_atomic_uint32	htab_counter;
 } TODSMRegistry;
 
@@ -72,22 +76,31 @@ typedef struct DSMOptimizerTrackerKey
 	uint64		queryId;
 } DSMOptimizerTrackerKey;
 
+/*
+ * Entry in the optimizer tracking hash table.
+ *
+ * Contains both per-execution snapshots (overwritten each time) and
+ * cumulative statistics (accumulated across all executions).
+ */
 typedef struct DSMOptimizerTrackerEntry
 {
 	DSMOptimizerTrackerKey	key;
 
-	double					avg_error;
-	double					rms_error;
-	double					twa_error;
-	RStats					wca_error;	/* Cost-Weighted Average error - accumulated as running statistics */
-	dsa_pointer				query_ptr;
-	int32					evaluated_nodes;
-	int32					plan_nodes;
-	double					exec_time;
-	int64					nexecs; /* Number of executions taken into account */
+	/* Per-execution statistics (most recent execution only - snapshots) */
+	double					avg_error;			/* Average estimation error (last execution) */
+	double					rms_error;			/* Root mean square error (last execution) */
+	double					twa_error;			/* Time-weighted average error (last execution) */
+	int32					evaluated_nodes;	/* Number of plan nodes evaluated (last execution) */
+	int32					plan_nodes;			/* Total number of plan nodes (last execution) */
 
-	/* Buffer usage statistics - accumulated across all executions */
-	RStats					blks_accessed;	/* Sum of all block hits, reads, and writes */
+	/* Cumulative statistics (accumulated across all executions) */
+	RStats					wca_error;			/* Weighted Cost Average error - running stats */
+	RStats					blks_accessed;		/* Block I/O (hits + reads + writes) - running stats */
+	double					exec_time;			/* Total execution time across all runs (seconds) */
+	int64					nexecs;				/* Number of executions tracked */
+
+	/* Metadata */
+	dsa_pointer				query_ptr;			/* Pointer to query text in shared memory */
 } DSMOptimizerTrackerEntry;
 
 static const dshash_parameters dsh_params = {
@@ -330,8 +343,13 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	entry = dshash_find_or_insert(htab, &key, &found);
 
 	/*
-	 * Just for the reference - per-execution values. It would be interesting
-	 * to make them also cumulative statistics.
+	 * Store per-execution statistics (most recent execution only).
+	 * These values are overwritten on each execution, showing only the latest
+	 * query execution metrics. Unlike the cumulative fields below (wca_error,
+	 * blks_accessed), these are point-in-time snapshots.
+	 *
+	 * TODO: Consider converting these to cumulative statistics as well for
+	 * better trend analysis over multiple executions.
 	 */
 	entry->evaluated_nodes = ctx->nnodes;
 	entry->plan_nodes = ctx->counter;
@@ -345,13 +363,18 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		size_t	len = strlen(queryDesc->sourceText);
 		char   *strptr;
 
-		/* Put the query string into the shared memory too */
+		/* Allocate and store the query string in shared memory */
 		entry->query_ptr = dsa_allocate0(htab_dsa, len + 1);
 		Assert(DsaPointerIsValid(entry->query_ptr));
 		strptr = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
 		strlcpy(strptr, queryDesc->sourceText, len + 1);
 
-		/* Init cumulative statistics' fields */
+		/*
+		 * Initialize cumulative statistics fields to empty state.
+		 * These will be populated incrementally as values are added via
+		 * rstats_add_value(). The empty state uses sentinel values (-1)
+		 * to indicate no data has been accumulated yet.
+		 */
 		rstats_set_empty(&entry->wca_error);
 		rstats_set_empty(&entry->blks_accessed);
 
@@ -361,13 +384,22 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
 	}
 
-	/* Accumulate statistics. Consider only physically meaningful one */
+	/*
+	 * Accumulate cumulative statistics across executions.
+	 *
+	 * wca_error (Weighted Cost Average error): Only accumulated when non-negative.
+	 * Negative values can occur legitimately when cost-based weighting produces
+	 * undefined results (e.g., division by zero cost), so we skip those cases.
+	 *
+	 * blks_accessed: Always accumulated. Block access counts are always >= 0
+	 * and represent valid physical I/O measurements for every execution.
+	 */
 	if (ctx->wca_error >= 0.)
 		rstats_add_value(&entry->wca_error, ctx->wca_error);
 	Assert(ctx->blks_accessed >= 0);
 	rstats_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
 
-	/* Accumulate 'total' fields */
+	/* Accumulate execution-level totals */
 	Assert(ctx->totaltime >= 0.);
 	entry->exec_time += ctx->totaltime;
 	entry->nexecs++;

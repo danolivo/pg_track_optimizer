@@ -144,12 +144,19 @@ rstats_send(PG_FUNCTION_ARGS)
 	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
 }
 
+/*
+ * Set RStats to an empty (uninitialized) state.
+ * We use -1 as a sentinel value for all fields except count because:
+ * 1. It's an invalid value for statistics (negative values shouldn't occur)
+ * 2. It allows rstats_is_empty() to verify structural integrity
+ * 3. It helps detect use of uninitialized/corrupted memory
+ */
 void
 rstats_set_empty(RStats *result)
 {
 	result->count = 0;
 
-	/* Arbitrary value, just to check it later */
+	/* Use -1 as sentinel to detect uninitialized state and memory corruption */
 	result->mean = -1.;
 	result->m2 = -1.;
 	result->min = -1.;
@@ -169,7 +176,10 @@ rstats_empty_constructor(PG_FUNCTION_ARGS)
 
 /*
  * Internal function: Initialize a RStats object from a single value
- * This can be called directly from C code without going through the Datum interface
+ * This can be called directly from C code without going through the Datum interface.
+ *
+ * Note: We call rstats_set_empty() first to ensure clean state before initialization.
+ * This is defensive programming - if the structure contained garbage, we clear it first.
  */
 void
 rstats_init_internal(RStats *result, double value)
@@ -223,7 +233,11 @@ rstats_init_numeric(PG_FUNCTION_ARGS)
 
 /*
  * Internal function: Add a value to existing statistics using Welford's algorithm
- * This can be called directly from C code without going through the Datum interface
+ * This can be called directly from C code without going through the Datum interface.
+ *
+ * If the statistics object is in empty state (count == 0), it's automatically
+ * initialized with the first value. This allows for convenient lazy initialization
+ * of cumulative statistics.
  */
 void
 rstats_add_value(RStats *rstats, double value)
@@ -232,6 +246,7 @@ rstats_add_value(RStats *rstats, double value)
 	double	delta2;
 	int64	new_count;
 
+	/* Handle empty state: initialize with first value */
 	if (rstats_is_empty(rstats))
 	{
 		rstats_init_internal(rstats, value);
@@ -270,7 +285,9 @@ rstats_add(PG_FUNCTION_ARGS)
 }
 
 /*
- * Utility function to check if running statistics value is empty
+ * Utility function to check if running statistics value is empty.
+ * Also verifies the sentinel values to ensure the structure hasn't been
+ * corrupted or used after being freed.
  */
 bool
 rstats_is_empty(RStats *value)
@@ -278,12 +295,15 @@ rstats_is_empty(RStats *value)
 	if (value->count > 0)
 		return false;
 
-	/* Empty value. Check to ensure it is not a freed memory block */
+	/*
+	 * Empty state detected. Verify sentinel values to ensure memory integrity.
+	 * If these assertions fail, it indicates memory corruption or use-after-free.
+	 */
 	Assert(value->count == 0);
 	Assert(value->mean == -1.);
-	Assert(value->m2 = -1.);
-	Assert(value->min = -1.);
-	Assert(value->max = -1.);
+	Assert(value->m2 == -1.);
+	Assert(value->min == -1.);
+	Assert(value->max == -1.);
 
 	return true;
 }
