@@ -91,11 +91,11 @@ typedef struct DSMOptimizerTrackerEntry
 	/* Per-execution statistics (most recent execution only - snapshots) */
 	double					avg_error;			/* Average estimation error (last execution) */
 	double					rms_error;			/* Root mean square error (last execution) */
-	double					twa_error;			/* Time-weighted average error (last execution) */
 	int32					evaluated_nodes;	/* Number of plan nodes evaluated (last execution) */
 	int32					plan_nodes;			/* Total number of plan nodes (last execution) */
 
 	/* Cumulative statistics (accumulated across all executions) */
+	RStats					twa_error;			/* Time-weighted average error - running stats */
 	RStats					wca_error;			/* Weighted Cost Average error - running stats */
 	RStats					blks_accessed;		/* Block I/O (hits + reads + writes) - running stats */
 	double					exec_time;			/* Total execution time across all runs (seconds) */
@@ -347,8 +347,8 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	/*
 	 * Store per-execution statistics (most recent execution only).
 	 * These values are overwritten on each execution, showing only the latest
-	 * query execution metrics. Unlike the cumulative fields below (wca_error,
-	 * blks_accessed), these are point-in-time snapshots.
+	 * query execution metrics. Unlike the cumulative fields below (twa_error,
+	 * wca_error, blks_accessed), these are point-in-time snapshots.
 	 *
 	 * TODO: Consider converting these to cumulative statistics as well for
 	 * better trend analysis over multiple executions.
@@ -358,7 +358,6 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 	entry->avg_error = ctx->avg_error;
 	entry->rms_error = ctx->rms_error;
-	entry->twa_error = ctx->twa_error;
 
 	if (!found)
 	{
@@ -377,6 +376,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		 * rstats_add_value(). The empty state uses sentinel values (-1)
 		 * to indicate no data has been accumulated yet.
 		 */
+		rstats_set_empty(&entry->twa_error);
 		rstats_set_empty(&entry->wca_error);
 		rstats_set_empty(&entry->blks_accessed);
 
@@ -389,6 +389,10 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	/*
 	 * Accumulate cumulative statistics across executions.
 	 *
+	 * twa_error (Time-Weighted Average error): Always accumulated when non-negative.
+	 * This error metric weights estimation errors by execution time, giving more
+	 * importance to longer-running queries.
+	 *
 	 * wca_error (Weighted Cost Average error): Only accumulated when non-negative.
 	 * Negative values can occur legitimately when cost-based weighting produces
 	 * undefined results (e.g., division by zero cost), so we skip those cases.
@@ -396,6 +400,8 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	 * blks_accessed: Always accumulated. Block access counts are always >= 0
 	 * and represent valid physical I/O measurements for every execution.
 	 */
+	if (ctx->twa_error >= 0.)
+		rstats_add_value(&entry->twa_error, ctx->twa_error);
 	if (ctx->wca_error >= 0.)
 		rstats_add_value(&entry->wca_error, ctx->wca_error);
 	Assert(ctx->blks_accessed >= 0);
@@ -595,9 +601,9 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 		/* Fill-in reference statistics fields */
 		values[i++] = Float8GetDatum(entry->avg_error);
 		values[i++] = Float8GetDatum(entry->rms_error);
-		values[i++] = Float8GetDatum(entry->twa_error);
 
 		/* Fill-in cumulative statistics fields */
+		values[i++] = RStatsPGetDatum(&entry->twa_error);
 		values[i++] = RStatsPGetDatum(&entry->wca_error);
 		values[i++] = RStatsPGetDatum(&entry->blks_accessed);
 
@@ -681,14 +687,14 @@ static const DSMOptimizerTrackerEntry EOFEntry = {
 											.key.queryId = 0,
 											.avg_error = -2.,
 											.rms_error = -2.,
-											.twa_error = -2.,
-											.wca_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
-											.query_ptr = 0,
 											.evaluated_nodes = -1,
 											.plan_nodes = -1,
+											.twa_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
+											.wca_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
+											.blks_accessed = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
 											.exec_time = -1.,
 											.nexecs = -1,
-											.blks_accessed = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0}
+											.query_ptr = 0
 											};
 #define IsEOFEntry(entry) ( \
 	(entry)->key.dbOid == EOFEntry.key.dbOid && \
@@ -874,13 +880,13 @@ _load_hash_table(TODSMRegistry *state)
 		 */
 		entry->avg_error = disk_entry.avg_error;
 		entry->rms_error = disk_entry.rms_error;
-		entry->twa_error = disk_entry.twa_error;
-		memcpy(&entry->wca_error, &disk_entry.wca_error, sizeof(RStats));
 		entry->evaluated_nodes = disk_entry.evaluated_nodes;
 		entry->plan_nodes = disk_entry.plan_nodes;
+		memcpy(&entry->twa_error, &disk_entry.twa_error, sizeof(RStats));
+		memcpy(&entry->wca_error, &disk_entry.wca_error, sizeof(RStats));
+		memcpy(&entry->blks_accessed, &disk_entry.blks_accessed, sizeof(RStats));
 		entry->exec_time = disk_entry.exec_time;
 		entry->nexecs = disk_entry.nexecs;
-		memcpy(&entry->blks_accessed, &disk_entry.blks_accessed, sizeof(RStats));
 		entry->query_ptr = disk_entry.query_ptr;
 
 		dshash_release_lock(htab, entry);

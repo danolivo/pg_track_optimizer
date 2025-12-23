@@ -27,8 +27,8 @@ error = |log(actual_rows / estimated_rows)|
 Four error metrics are computed:
 - **avg_error**: Simple average across all plan nodes
 - **rms_error**: Root Mean Square (RMS) - emphasises large errors
-- **twa_error**: Time-Weighted Average (TWA) - highlights errors in time-consuming nodes
-- **wca_error**: Cost-Weighted Average (WCA) - highlights errors in high-cost nodes according to the planner
+- **twa_error**: Time-Weighted Average (TWA) - cumulative statistics highlighting errors in time-consuming nodes
+- **wca_error**: Cost-Weighted Average (WCA) - cumulative statistics highlighting errors in high-cost nodes according to the planner
 
 Queries with high error values are candidates for investigation: missing indexes, outdated statistics, or planner limitations.
 
@@ -111,9 +111,17 @@ SET pg_track_optimizer.hash_mem = 10240;
 
 ```sql
 SELECT
-  queryid, query,
-  avg_error, rms_error, twa_error, wca_error, blks_accessed,
-  evaluated_nodes, plan_nodes, exec_time, nexecs
+    queryid,
+    query,
+    avg_error,
+    rms_error,
+    twa_avg, twa_min, twa_max,  -- twa_error expanded fields
+    wca_avg, wca_min, wca_max,  -- wca_error expanded fields
+    blks_avg, blks_min, blks_max,  -- blks_accessed expanded fields
+    evaluated_nodes,
+    plan_nodes,
+    exec_time,
+    nexecs
 FROM pg_track_optimizer
 ORDER BY avg_error DESC
 LIMIT 10;
@@ -121,10 +129,10 @@ LIMIT 10;
 
 **Example output:**
 ```
-   queryid   |                    query                         | avg_error | rms_error | twa_error | wca_error | evaluated_nodes | plan_nodes | exec_time | nexecs | blks_accessed
--------------+--------------------------------------------------+-----------+-----------+-----------+-----------+-----------------+------------+-----------+--------+---------------
- 42387612345 | SELECT * FROM orders WHERE customer_id = $1      |      4.23 |      4.89 |      4.56 |      3.87 |               5 |          7 |   1523.45 |    142 |         28456
- 98765432109 | SELECT COUNT(*) FROM products WHERE category...  |      3.87 |      4.12 |      3.95 |      4.21 |               3 |          4 |    234.12 |     23 |          5632
+   queryid   |                    query                         | avg_error | rms_error | twa_avg | twa_min | twa_max | wca_avg | wca_min | wca_max | blks_avg | blks_min | blks_max | evaluated_nodes | plan_nodes | exec_time | nexecs
+-------------+--------------------------------------------------+-----------+-----------+---------+---------+---------+---------+---------+---------+----------+----------+----------+-----------------+------------+-----------+--------
+ 42387612345 | SELECT * FROM orders WHERE customer_id = $1      |      4.23 |      4.89 |    4.56 |    3.21 |    5.78 |    3.87 |    2.45 |    4.92 |    28456 |    24000 |    32000 |               5 |          7 |   1523.45 |    142
+ 98765432109 | SELECT COUNT(*) FROM products WHERE category...  |      3.87 |      4.12 |    3.95 |    3.12 |    4.56 |    4.21 |    3.45 |    5.12 |     5632 |     4800 |     6400 |               3 |          4 |    234.12 |     23
 ```
 
 ### Column Descriptions
@@ -133,7 +141,7 @@ LIMIT 10;
 - **query**: The SQL query (normalised, with literals replaced by `$1`, `$2`, etc.)
 - **avg_error**: Simple average of log-scale errors across plan nodes
 - **rms_error**: Root Mean Square (RMS) error - emphasises large estimation errors
-- **twa_error**: Time-Weighted Average (TWA) error - highlights estimation errors in time-consuming nodes
+- **twa_error**: Time-Weighted Average (TWA) error per execution (rstats type). Tracks running statistics of TWA error values across query executions. The view exposes this as `twa_min`, `twa_max`, `twa_cnt`, `twa_avg`, and `twa_dev` columns. Use the `->` operator on the raw function output to access fields: `twa_error -> 'mean'`, `twa_error -> 'stddev'`, etc.
 - **wca_error**: Cost-Weighted Average (WCA) error per execution (rstats type). Tracks running statistics of WCA error values across query executions. The view exposes this as `wca_min`, `wca_max`, `wca_cnt`, `wca_avg`, and `wca_dev` columns. Use the `->` operator on the raw function output to access fields: `wca_error -> 'mean'`, `wca_error -> 'stddev'`, etc.
 - **evaluated_nodes**: Number of plan nodes analysed
 - **plan_nodes**: Total plan nodes (some may be skipped, e.g., never-executed branches)
@@ -141,11 +149,11 @@ LIMIT 10;
 - **nexecs**: Number of times the query was executed
 - **blks_accessed**: Running statistics of blocks accessed per execution (rstats type). The view exposes this as `blks_min`, `blks_max`, `blks_cnt`, `blks_avg`, and `blks_dev` columns. Use the `->` operator on the raw function output to access fields: `blks_accessed -> 'mean'`, `blks_accessed -> 'stddev'`, etc.
 
-> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `wca_error`, and `blks_accessed` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
+> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `twa_error`, `wca_error`, and `blks_accessed` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
 
 ### The rstats Type
 
-The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `wca_error` and `blks_accessed` columns to provide detailed statistics about cost-weighted errors and block access patterns across multiple query executions.
+The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `twa_error`, `wca_error`, and `blks_accessed` columns to provide detailed statistics about time-weighted errors, cost-weighted errors, and block access patterns across multiple query executions.
 
 **Fields accessible via the `->` operator:**
 - `count`: Number of observations
