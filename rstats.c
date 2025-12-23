@@ -21,6 +21,7 @@ PG_FUNCTION_INFO_V1(rstats_out);
 PG_FUNCTION_INFO_V1(rstats_recv);
 PG_FUNCTION_INFO_V1(rstats_send);
 
+PG_FUNCTION_INFO_V1(rstats_empty_constructor);
 PG_FUNCTION_INFO_V1(rstats_init_double);
 PG_FUNCTION_INFO_V1(rstats_init_numeric);
 
@@ -142,6 +143,35 @@ rstats_send(PG_FUNCTION_ARGS)
 	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
 }
 
+void
+rstats_set_empty(RStats *result)
+{
+	result->count = 0;
+
+	/* Arbitrary value, just to check it later */
+	result->mean = -1.;
+	result->m2 = -1.;
+	result->min = -1.;
+	result->max = -1.;
+}
+
+bool
+rstats_is_empty(RStats *result)
+{
+	return (result->count == 0);
+}
+
+Datum
+rstats_empty_constructor(PG_FUNCTION_ARGS)
+{
+	RStats *result;
+
+	result = (RStats *) palloc(sizeof(RStats));
+	rstats_set_empty(result);
+
+	PG_RETURN_POINTER(result);
+}
+
 /*
  * Internal function: Initialize a RStats object from a single value
  * This can be called directly from C code without going through the Datum interface
@@ -149,6 +179,8 @@ rstats_send(PG_FUNCTION_ARGS)
 void
 rstats_init_internal(RStats *result, double value)
 {
+	rstats_set_empty(result);
+
 	result->count = 1;
 	result->mean = value;
 	result->m2 = 0.0;	  /* No variance with single value */
@@ -205,6 +237,12 @@ rstats_add_value(RStats *stats, double value)
 	double	delta2;
 	int64	new_count;
 
+	if (rstats_is_empty(stats))
+	{
+		rstats_init_internal(stats, value);
+		return;
+	}
+
 	/* Welford's algorithm for incremental mean and variance */
 	new_count = stats->count + 1;
 	delta = value - stats->mean;
@@ -216,18 +254,10 @@ rstats_add_value(RStats *stats, double value)
 	stats->m2 = stats->m2 + delta * delta2;
 
 	/* Update min/max */
-	if (new_count == 1)
-	{
+	if (value < stats->min)
 		stats->min = value;
+	if (value > stats->max)
 		stats->max = value;
-	}
-	else
-	{
-		if (value < stats->min)
-			stats->min = value;
-		if (value > stats->max)
-			stats->max = value;
-	}
 }
 
 /*

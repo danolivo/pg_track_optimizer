@@ -111,6 +111,14 @@ CREATE OPERATOR -> (
 
 COMMENT ON OPERATOR -> (rstats, text) IS 'Field accessor operator for rstats type (e.g., stats -> ''mean'')';
 
+-- Empty constructor for rstats
+CREATE FUNCTION rstats()
+    RETURNS rstats
+    AS 'MODULE_PATHNAME', 'rstats_empty_constructor'
+    LANGUAGE C IMMUTABLE STRICT;
+
+COMMENT ON FUNCTION rstats() IS 'Create an empty rstats object';
+
 CREATE FUNCTION pg_track_optimizer(
 	OUT dboid			Oid,
 	OUT queryid			bigint,
@@ -118,7 +126,7 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT avg_error		float8,
 	OUT rms_error		float8,
 	OUT twa_error		float8,
-	OUT wca_error		float8,
+	OUT wca_error		rstats,
 	OUT evaluated_nodes integer,
 	OUT plan_nodes      integer,
 	OUT exec_time       float8,
@@ -135,10 +143,17 @@ LANGUAGE C STRICT VOLATILE;
  */
 CREATE VIEW pg_track_optimizer AS SELECT
   t.queryid, t.query, t.avg_error, t.rms_error, t.twa_error,
-  t.wca_error, t.evaluated_nodes, t.plan_nodes, t.exec_time, t.nexecs,
-  t.blks_accessed -> 'min' AS blks_min,t.blks_accessed -> 'max' AS blks_max,
+  /* Planning error, weighted by cost factor */
+  t.wca_error -> 'min' AS wca_min, t.wca_error -> 'max' AS wca_max,
+  t.wca_error -> 'count' AS wca_cnt,
+  t.wca_error -> 'mean' AS wca_avg, t.wca_error -> 'stddev' AS wca_dev,
+
+  /* Blocks statistics */
+  t.blks_accessed -> 'min' AS blks_min, t.blks_accessed -> 'max' AS blks_max,
   t.blks_accessed -> 'count' AS blks_cnt,
-  t.blks_accessed -> 'mean' AS blks_avg, t.blks_accessed -> 'stddev' AS blks_dev
+  t.blks_accessed -> 'mean' AS blks_avg, t.blks_accessed -> 'stddev' AS blks_dev,
+
+  t.evaluated_nodes, t.plan_nodes, t.exec_time, t.nexecs
 FROM pg_track_optimizer() t, pg_database d
 WHERE t.dboid = d.oid AND datname = current_database();
 COMMENT ON VIEW pg_track_optimizer IS 'query tracking data for current database';

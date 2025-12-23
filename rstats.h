@@ -18,18 +18,18 @@
  */
 typedef struct RStats
 {
-    int64       count;          /* number of values */
-    double      mean;           /* running mean */
-    double      m2;             /* sum of squared differences from mean (for variance) */
-    double      min;            /* minimum value */
-    double      max;            /* maximum value */
+	int64	count;	/* number of values */
+	double	mean;	/* running mean */
+	double	m2;		/* sum of squared differences from mean (for variance) */
+	double	min;	/* minimum value */
+	double	max;	/* maximum value */
 } RStats;
 
 /* Macros for easier access */
-#define DatumGetRStatsP(X)      ((RStats *) DatumGetPointer(X))
-#define RStatsPGetDatum(X)      PointerGetDatum(X)
-#define PG_GETARG_RSTATS_P(n)   DatumGetRStatsP(PG_GETARG_DATUM(n))
-#define PG_RETURN_RSTATS_P(x)   return RStatsPGetDatum(x)
+#define DatumGetRStatsP(X) ((RStats *) DatumGetPointer(X))
+#define RStatsPGetDatum(X) PointerGetDatum(X)
+#define PG_GETARG_RSTATS_P(n) DatumGetRStatsP(PG_GETARG_DATUM(n))
+#define PG_RETURN_RSTATS_P(x) return RStatsPGetDatum(x)
 
 /*
  * Internal functions for manipulating RStats objects
@@ -41,5 +41,8 @@ extern void rstats_init_internal(RStats *result, double value);
 
 /* Add a value to existing statistics using Welford's algorithm */
 extern void rstats_add_value(RStats *stats, double value);
+
+extern bool rstats_is_empty(RStats *result);
+extern void rstats_set_empty(RStats *result);
 
 #endif /* RSTATS_H */

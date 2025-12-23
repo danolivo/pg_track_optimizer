@@ -78,7 +78,7 @@ typedef struct DSMOptimizerTrackerEntry
 	double					avg_error;
 	double					rms_error;
 	double					twa_error;
-	double					wca_error;
+	RStats					wca_error;
 	dsa_pointer				query_ptr;
 	int32					evaluated_nodes;
 	int32					plan_nodes;
@@ -330,7 +330,6 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	entry->avg_error = ctx->avg_error;
 	entry->rms_error = ctx->rms_error;
 	entry->twa_error = ctx->twa_error;
-	entry->wca_error = ctx->wca_error;
 	entry->evaluated_nodes = ctx->nnodes;
 	entry->plan_nodes = ctx->counter;
 
@@ -348,16 +347,18 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		entry->exec_time = 0.0;
 		entry->nexecs = 0;
 
-		/* Initialize buffer usage statistics with first value */
-		rstats_init_internal(&entry->blks_accessed, (double) ctx->blks_accessed);
+		/* Init cumulative statistics' fields */
+		rstats_set_empty(&entry->wca_error);
+		rstats_set_empty(&entry->blks_accessed);
 
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
 	}
-	else
-	{
-		/* Accumulate buffer usage statistics using Welford's algorithm */
-		rstats_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
-	}
+
+	/* Accumulate statistics. Consider only physically meaningful one */
+	if (ctx->wca_error >= 0.)
+		rstats_add_value(&entry->wca_error, ctx->wca_error);
+	Assert(ctx->blks_accessed >= 0);
+	rstats_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
 
 	/* Accumulate total execution time across all executions */
 	entry->exec_time += ctx->totaltime;
@@ -552,7 +553,7 @@ to_show_data(PG_FUNCTION_ARGS)
 		values[i++] = Float8GetDatum(entry->avg_error);
 		values[i++] = Float8GetDatum(entry->rms_error);
 		values[i++] = Float8GetDatum(entry->twa_error);
-		values[i++] = Float8GetDatum(entry->wca_error);
+		values[i++] = PointerGetDatum((void *) &entry->wca_error);
 		values[i++] = Int32GetDatum(entry->evaluated_nodes);
 		values[i++] = Int32GetDatum(entry->plan_nodes);
 		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */

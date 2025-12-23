@@ -6,6 +6,10 @@ SELECT 42.5::rstats;
 SELECT (42.1::double precision)::rstats;
 SELECT (NULL::double precision)::rstats;
 
+-- Test empty rstats constructor
+SELECT rstats();
+SELECT rstats() + 5.0;
+
 SELECT q.s, q.s + 1.0, q.s + 2.0, q.s + NULL
   FROM (VALUES (1.0::rstats)) AS q(s);
 SELECT q.s, q.s + 1.0, q.s + NULL FROM (VALUES (NULL::rstats)) AS q(s);
