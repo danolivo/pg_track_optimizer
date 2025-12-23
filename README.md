@@ -111,18 +111,10 @@ SET pg_track_optimizer.hash_mem = 10240;
 
 ```sql
 SELECT
-    queryid,
-    query,
-    avg_error,
-    rms_error,
-    twa_error,
-    wca_error,
-    evaluated_nodes,
-    plan_nodes,
-    exec_time,
-    nexecs,
-    blks_accessed
-FROM pg_track_optimizer()
+  queryid, query,
+  avg_error, rms_error, twa_error, wca_error, blks_accessed,
+  evaluated_nodes, plan_nodes, exec_time, nexecs
+FROM pg_track_optimizer
 ORDER BY avg_error DESC
 LIMIT 10;
 ```
@@ -153,7 +145,7 @@ LIMIT 10;
 
 ### The rstats Type
 
-The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability. It's used for the `wca_error` and `blks_accessed` columns to provide detailed statistics about cost-weighted errors and block access patterns across multiple query executions.
+The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `wca_error` and `blks_accessed` columns to provide detailed statistics about cost-weighted errors and block access patterns across multiple query executions.
 
 **Fields accessible via the `->` operator:**
 - `count`: Number of observations
