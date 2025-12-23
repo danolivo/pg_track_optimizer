@@ -60,6 +60,8 @@ typedef struct TODSMRegistry
 	 * Atomic counter tracking the number of entries in the hash table.
 	 * Used to enforce memory limits without scanning the entire table.
 	 * Incremented on insert, decremented on delete.
+	 * TODO: if this counter is consistent with the real number of HTAB's
+	 * records we may use it in IO disk operations instead of archaic EOFEntry.
 	 */
 	pg_atomic_uint32	htab_counter;
 } TODSMRegistry;
