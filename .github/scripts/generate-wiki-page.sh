@@ -49,7 +49,7 @@ cat > "$WIKI_PAGE" <<EOF
 
 ## Top Queries by Error Metrics
 
-This table shows queries that appear in the top 10 for **all** error metrics (avg_error, rms_error, twa_error, and wca_error). These are the queries with consistently poor estimation across all criteria.
+This table shows queries that appear in the top 10 for **all** error metrics (avg_error, rms_error, twa_avg, and wca_avg). These are the queries with consistently poor estimation across all criteria.
 
 \`\`\`
 ${BENCHMARK_RESULTS}
@@ -62,10 +62,10 @@ The results above include the following metrics for each query:
 - **query**: The SQL query text (normalised, with literals replaced by placeholders; truncated to first 32 characters)
 - **avg_error**: Simple average of log-scale errors across plan nodes
 - **rms_error**: Root Mean Square error (emphasises large estimation errors)
-- **twa_error**: Time-Weighted Average error (highlights errors in slow nodes)
-- **wca_error**: Cost-Weighted Average error (highlights errors in expensive nodes)
+- **twa_avg, twa_min, twa_max, twa_cnt, twa_dev**: Time-Weighted Average error statistics (highlights errors in slow nodes)
+- **wca_avg, wca_min, wca_max, wca_cnt, wca_dev**: Cost-Weighted Average error statistics (highlights errors in expensive nodes)
 - **exec_time**: Total execution time across all executions (milliseconds)
-- **blks_accessed**: Total blocks accessed (shared, local, and temporary blocks hit/read/written)
+- **blks_avg, blks_min, blks_max, blks_cnt, blks_dev**: Block access statistics across all executions
 - **nexecs**: Number of times the query was executed
 
 Only queries appearing in the top 10 of **every** error metric are shown, representing the most consistently problematic queries.
