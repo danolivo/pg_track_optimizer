@@ -118,9 +118,9 @@ SELECT
     twa_avg, twa_min, twa_max,  -- twa_error expanded fields
     wca_avg, wca_min, wca_max,  -- wca_error expanded fields
     blks_avg, blks_min, blks_max,  -- blks_accessed expanded fields
+    time_avg, time_min, time_max,  -- exec_time expanded fields
     evaluated_nodes,
     plan_nodes,
-    exec_time,
     nexecs
 FROM pg_track_optimizer
 ORDER BY avg_avg DESC
@@ -129,31 +129,33 @@ LIMIT 10;
 
 **Example output:**
 ```
-   queryid   |                    query                         | avg_avg | avg_min | avg_max | rms_avg | rms_min | rms_max | twa_avg | twa_min | twa_max | wca_avg | wca_min | wca_max | blks_avg | blks_min | blks_max | evaluated_nodes | plan_nodes | exec_time | nexecs
--------------+--------------------------------------------------+---------+---------+---------+---------+---------+---------+---------+---------+---------+---------+---------+---------+----------+----------+----------+-----------------+------------+-----------+--------
- 42387612345 | SELECT * FROM orders WHERE customer_id = $1      |    4.23 |    3.89 |    4.67 |    4.89 |    4.12 |    5.34 |    4.56 |    3.21 |    5.78 |    3.87 |    2.45 |    4.92 |    28456 |    24000 |    32000 |               5 |          7 |   1523.45 |    142
- 98765432109 | SELECT COUNT(*) FROM products WHERE category...  |    3.87 |    3.45 |    4.21 |    4.12 |    3.78 |    4.56 |    3.95 |    3.12 |    4.56 |    4.21 |    3.45 |    5.12 |     5632 |     4800 |     6400 |               3 |          4 |    234.12 |     23
+   queryid   |                    query                         | avg_avg | time_avg | blks_avg | evaluated_nodes | plan_nodes | nexecs
+-------------+--------------------------------------------------+---------+----------+----------+-----------------+------------+--------
+ 42387612345 | SELECT * FROM orders WHERE customer_id = $1      |    4.23 |   152.34 |    28456 |               5 |          7 |    142
+ 98765432109 | SELECT COUNT(*) FROM products WHERE category...  |    3.87 |    23.41 |     5632 |               3 |          4 |     23
 ```
 
 ### Column Descriptions
 
-- **queryid**: Internal PostgreSQL query identifier (same as in pg_stat_statements)
-- **query**: The SQL query (normalised, with literals replaced by `$1`, `$2`, etc.)
-- **avg_error**: Simple average of log-scale errors across plan nodes per execution (rstats type). Tracks running statistics of average error values across query executions. The view exposes this as `avg_min`, `avg_max`, `avg_cnt`, `avg_avg`, and `avg_dev` columns. Use the `->` operator on the raw function output to access fields: `avg_error -> 'mean'`, `avg_error -> 'stddev'`, etc.
-- **rms_error**: Root Mean Square (RMS) error per execution (rstats type). Tracks running statistics of RMS error values across query executions. The view exposes this as `rms_min`, `rms_max`, `rms_cnt`, `rms_avg`, and `rms_dev` columns. Use the `->` operator on the raw function output to access fields: `rms_error -> 'mean'`, `rms_error -> 'stddev'`, etc.
-- **twa_error**: Time-Weighted Average (TWA) error per execution (rstats type). Tracks running statistics of TWA error values across query executions. The view exposes this as `twa_min`, `twa_max`, `twa_cnt`, `twa_avg`, and `twa_dev` columns. Use the `->` operator on the raw function output to access fields: `twa_error -> 'mean'`, `twa_error -> 'stddev'`, etc.
-- **wca_error**: Cost-Weighted Average (WCA) error per execution (rstats type). Tracks running statistics of WCA error values across query executions. The view exposes this as `wca_min`, `wca_max`, `wca_cnt`, `wca_avg`, and `wca_dev` columns. Use the `->` operator on the raw function output to access fields: `wca_error -> 'mean'`, `wca_error -> 'stddev'`, etc.
-- **evaluated_nodes**: Number of plan nodes analysed
-- **plan_nodes**: Total plan nodes (some may be skipped, e.g., never-executed branches)
-- **exec_time**: Total execution time across all executions (milliseconds). Divide by `nexecs` to get average per execution
-- **nexecs**: Number of times the query was executed
-- **blks_accessed**: Running statistics of blocks accessed per execution (rstats type). The view exposes this as `blks_min`, `blks_max`, `blks_cnt`, `blks_avg`, and `blks_dev` columns. Use the `->` operator on the raw function output to access fields: `blks_accessed -> 'mean'`, `blks_accessed -> 'stddev'`, etc.
+| Column | Type | Description |
+|--------|------|-------------|
+| `queryid` | bigint | Internal PostgreSQL query identifier (same as in pg_stat_statements) |
+| `query` | text | The SQL query (normalised, with literals replaced by `$1`, `$2`, etc.) |
+| `avg_error` | rstats | Simple average of log-scale errors across plan nodes per execution. Tracks running statistics of average error values across query executions. The view exposes this as `avg_min`, `avg_max`, `avg_cnt`, `avg_avg`, and `avg_dev` columns. Use the `->` operator on the raw function output to access fields: `avg_error -> 'mean'`, `avg_error -> 'stddev'`, etc. |
+| `rms_error` | rstats | Root Mean Square (RMS) error per execution. Tracks running statistics of RMS error values across query executions. The view exposes this as `rms_min`, `rms_max`, `rms_cnt`, `rms_avg`, and `rms_dev` columns. Use the `->` operator on the raw function output to access fields: `rms_error -> 'mean'`, `rms_error -> 'stddev'`, etc. |
+| `twa_error` | rstats | Time-Weighted Average (TWA) error per execution. Tracks running statistics of TWA error values across query executions. The view exposes this as `twa_min`, `twa_max`, `twa_cnt`, `twa_avg`, and `twa_dev` columns. Use the `->` operator on the raw function output to access fields: `twa_error -> 'mean'`, `twa_error -> 'stddev'`, etc. |
+| `wca_error` | rstats | Cost-Weighted Average (WCA) error per execution. Tracks running statistics of WCA error values across query executions. The view exposes this as `wca_min`, `wca_max`, `wca_cnt`, `wca_avg`, and `wca_dev` columns. Use the `->` operator on the raw function output to access fields: `wca_error -> 'mean'`, `wca_error -> 'stddev'`, etc. |
+| `blks_accessed` | rstats | Running statistics of blocks accessed per execution. The view exposes this as `blks_min`, `blks_max`, `blks_cnt`, `blks_avg`, and `blks_dev` columns. Use the `->` operator on the raw function output to access fields: `blks_accessed -> 'mean'`, `blks_accessed -> 'stddev'`, etc. |
+| `exec_time` | rstats | Execution time per query in milliseconds. Tracks running statistics of execution times across query executions. The view exposes this as `time_min`, `time_max`, `time_cnt`, `time_avg`, and `time_dev` columns. Use the `->` operator on the raw function output to access fields: `exec_time -> 'mean'`, `exec_time -> 'stddev'`, etc. |
+| `evaluated_nodes` | integer | Number of plan nodes analysed |
+| `plan_nodes` | integer | Total plan nodes (some may be skipped, e.g., never-executed branches) |
+| `nexecs` | bigint | Number of times the query was executed |
 
 > **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `avg_error`, `rms_error`, `twa_error`, `wca_error`, and `blks_accessed` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
 
 ### The rstats Type
 
-The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `avg_error`, `rms_error`, `twa_error`, `wca_error`, and `blks_accessed` columns to provide detailed statistics about all error metrics and block access patterns across multiple query executions.
+The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `avg_error`, `rms_error`, `twa_error`, `wca_error`, `blks_accessed`, and `exec_time` columns to provide detailed statistics about all error metrics, block access patterns, and execution times across multiple query executions.
 
 **Fields accessible via the `->` operator:**
 - `count`: Number of observations
@@ -242,10 +244,10 @@ SELECT
     query,
     avg_error -> 'mean' AS avg_avg,
     nexecs,
-    exec_time / nexecs AS avg_time_ms
+    exec_time -> 'mean' AS avg_time_ms
 FROM pg_track_optimizer()
 WHERE avg_error -> 'mean' > 2.0
-ORDER BY exec_time DESC;
+ORDER BY exec_time -> 'mean' DESC;
 ```
 
 ### 4. Investigate and Fix
