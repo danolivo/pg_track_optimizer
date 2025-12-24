@@ -118,6 +118,7 @@ SELECT
     twa_avg, twa_min, twa_max,  -- twa_error expanded fields
     wca_avg, wca_min, wca_max,  -- wca_error expanded fields
     blks_avg, blks_min, blks_max,  -- blks_accessed expanded fields
+    local_avg, local_min, local_max,  -- local_blks expanded fields
     time_avg, time_min, time_max,  -- exec_time expanded fields
     evaluated_nodes,
     plan_nodes,
@@ -146,16 +147,17 @@ LIMIT 10;
 | `twa_error` | rstats | Time-Weighted Average (TWA) error per execution. Tracks running statistics of TWA error values across query executions. The view exposes this as `twa_min`, `twa_max`, `twa_cnt`, `twa_avg`, and `twa_dev` columns. Use the `->` operator on the raw function output to access fields: `twa_error -> 'mean'`, `twa_error -> 'stddev'`, etc. |
 | `wca_error` | rstats | Cost-Weighted Average (WCA) error per execution. Tracks running statistics of WCA error values across query executions. The view exposes this as `wca_min`, `wca_max`, `wca_cnt`, `wca_avg`, and `wca_dev` columns. Use the `->` operator on the raw function output to access fields: `wca_error -> 'mean'`, `wca_error -> 'stddev'`, etc. |
 | `blks_accessed` | rstats | Running statistics of blocks accessed per execution. The view exposes this as `blks_min`, `blks_max`, `blks_cnt`, `blks_avg`, and `blks_dev` columns. Use the `->` operator on the raw function output to access fields: `blks_accessed -> 'mean'`, `blks_accessed -> 'stddev'`, etc. |
+| `local_blks` | rstats | Running statistics of local blocks (read + written + dirtied) per execution. Local blocks indicate temporary tables or sorts spilling to disk, signaling insufficient work_mem. The view exposes this as `local_min`, `local_max`, `local_cnt`, `local_avg`, and `local_dev` columns. Use the `->` operator on the raw function output to access fields: `local_blks -> 'mean'`, `local_blks -> 'stddev'`, etc. |
 | `exec_time` | rstats | Execution time per query in milliseconds. Tracks running statistics of execution times across query executions. The view exposes this as `time_min`, `time_max`, `time_cnt`, `time_avg`, and `time_dev` columns. Use the `->` operator on the raw function output to access fields: `exec_time -> 'mean'`, `exec_time -> 'stddev'`, etc. |
 | `evaluated_nodes` | integer | Number of plan nodes analysed |
 | `plan_nodes` | integer | Total plan nodes (some may be skipped, e.g., never-executed branches) |
 | `nexecs` | bigint | Number of times the query was executed |
 
-> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `avg_error`, `rms_error`, `twa_error`, `wca_error`, and `blks_accessed` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
+> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `avg_error`, `rms_error`, `twa_error`, `wca_error`, `blks_accessed`, and `local_blks` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
 
 ### The rstats Type
 
-The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `avg_error`, `rms_error`, `twa_error`, `wca_error`, `blks_accessed`, and `exec_time` columns to provide detailed statistics about all error metrics, block access patterns, and execution times across multiple query executions.
+The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `avg_error`, `rms_error`, `twa_error`, `wca_error`, `blks_accessed`, `local_blks`, and `exec_time` columns to provide detailed statistics about all error metrics, block access patterns, local block usage (work_mem indicator), and execution times across multiple query executions.
 
 **Fields accessible via the `->` operator:**
 - `count`: Number of observations
@@ -225,6 +227,13 @@ Indicates estimation errors in nodes the planner considered expensive. This can 
 - **Misalignment between cost model and reality**: Planner's cost estimates don't match actual execution patterns
 - **Index vs sequential scan decisions**: Wrong cost estimates led to poor access method choices
 - **Join method selection**: Planner overestimated cost of certain join types
+
+### High `local_avg` (local blocks)
+Indicates queries using local blocks, which signals work_mem issues rather than optimization problems:
+- **Insufficient work_mem**: Sorts, hash joins, or aggregates spilling to disk
+- **Temporary table usage**: Queries creating or using temporary tables
+- **Memory-intensive operations**: Queries with high memory requirements exceeding work_mem
+- **Quick fix**: Unlike optimization errors, this can often be resolved by simply increasing work_mem
 
 ## Example Workflow
 
