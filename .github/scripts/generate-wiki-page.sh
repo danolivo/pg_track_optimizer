@@ -64,8 +64,9 @@ The results above include the following metrics for each query:
 - **rms_avg, rms_min, rms_max, rms_cnt, rms_dev**: Root Mean Square error statistics (emphasises large estimation errors)
 - **twa_avg, twa_min, twa_max, twa_cnt, twa_dev**: Time-Weighted Average error statistics (highlights errors in slow nodes)
 - **wca_avg, wca_min, wca_max, wca_cnt, wca_dev**: Cost-Weighted Average error statistics (highlights errors in expensive nodes)
-- **time_avg, time_min, time_max, time_cnt, time_dev**: Execution time statistics per query (milliseconds)
 - **blks_avg, blks_min, blks_max, blks_cnt, blks_dev**: Block access statistics across all executions
+- **local_avg, local_min, local_max, local_cnt, local_dev**: Local block statistics (work_mem indicator - sorts/joins spilling to disk)
+- **time_avg, time_min, time_max, time_cnt, time_dev**: Execution time statistics per query (milliseconds)
 - **nexecs**: Number of times the query was executed
 
 Only queries appearing in the top 10 of **every** error metric are shown, representing the most consistently problematic queries.

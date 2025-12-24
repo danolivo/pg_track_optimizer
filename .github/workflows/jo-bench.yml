@@ -182,6 +182,7 @@ jobs:
             ROUND(AVG(twa_avg)::numeric, 2) as twa_error_mean,
             ROUND(AVG(wca_avg)::numeric, 2) as wca_error_mean,
             SUM(blks_avg) as total_blks_avg,
+            SUM(local_avg) as total_local_avg,
             SUM(nexecs) as total_executions,
             ROUND(SUM(time_avg * nexecs)::numeric, 2) as total_exec_time_ms
           FROM pg_track_optimizer;
@@ -198,6 +199,7 @@ jobs:
             twa_avg,twa_min,twa_max,twa_cnt,twa_dev,
             wca_avg,wca_min,wca_max,wca_cnt,wca_dev,
             blks_avg,blks_min,blks_max,blks_cnt,blks_dev,
+            local_avg,local_min,local_max,local_cnt,local_dev,
             time_avg,time_min,time_max,time_cnt,time_dev,
             evaluated_nodes, plan_nodes,
             nexecs
@@ -233,8 +235,10 @@ jobs:
                  v.rms_avg, v.rms_min, v.rms_max, v.rms_cnt, v.rms_dev,
                  v.twa_avg, v.twa_min, v.twa_max, v.twa_cnt, v.twa_dev,
                  v.wca_avg, v.wca_min, v.wca_max, v.wca_cnt, v.wca_dev,
+                 v.blks_avg, v.blks_min, v.blks_max, v.blks_cnt, v.blks_dev,
+                 v.local_avg, v.local_min, v.local_max, v.local_cnt, v.local_dev,
                  v.time_avg, v.time_min, v.time_max, v.time_cnt, v.time_dev,
-                 v.blks_avg, v.blks_min, v.blks_max, v.blks_cnt, v.blks_dev, v.nexecs
+                 v.nexecs
           FROM pg_track_optimizer v
           WHERE v.queryid IN (SELECT queryid FROM intersection)
           ORDER BY v.avg_avg DESC;

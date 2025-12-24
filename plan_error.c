@@ -228,6 +228,15 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 						 queryDesc->totaltime->bufusage.temp_blks_read +
 						 queryDesc->totaltime->bufusage.temp_blks_written;
 
+	/*
+	 * Collect local blocks statistics separately to help identify work_mem issues.
+	 * Local blocks indicate temporary tables/sorts spilling to disk, suggesting
+	 * insufficient work_mem rather than optimization/statistics errors.
+	 */
+	ctx->local_blks = queryDesc->totaltime->bufusage.local_blks_read +
+					  queryDesc->totaltime->bufusage.local_blks_written +
+					  queryDesc->totaltime->bufusage.local_blks_dirtied;
+
 	Assert(ctx->totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);
 

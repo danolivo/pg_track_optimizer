@@ -124,6 +124,7 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT twa_error		rstats,
 	OUT wca_error		rstats,
 	OUT blks_accessed   rstats,
+	OUT local_blks      rstats,
 	OUT exec_time       rstats,
 	OUT evaluated_nodes integer,
 	OUT plan_nodes      integer,
@@ -164,6 +165,11 @@ CREATE VIEW pg_track_optimizer AS SELECT
   t.blks_accessed -> 'min' AS blks_min, t.blks_accessed -> 'max' AS blks_max,
   t.blks_accessed -> 'count' AS blks_cnt,
   t.blks_accessed -> 'mean' AS blks_avg, t.blks_accessed -> 'stddev' AS blks_dev,
+
+  /* Local blocks statistics (work_mem indicator) */
+  t.local_blks -> 'min' AS local_min, t.local_blks -> 'max' AS local_max,
+  t.local_blks -> 'count' AS local_cnt,
+  t.local_blks -> 'mean' AS local_avg, t.local_blks -> 'stddev' AS local_dev,
 
   /* Execution time statistics (milliseconds) */
   t.exec_time -> 'min' AS time_min, t.exec_time -> 'max' AS time_max,
