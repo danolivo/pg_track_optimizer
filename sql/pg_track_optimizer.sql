@@ -10,20 +10,26 @@ CREATE TABLE pto_test(x integer, y integer, z integer);
 ANALYZE pto_test;
 
 EXPLAIN (COSTS OFF) SELECT * FROM pto_test WHERE x < 1;
-SELECT query, avg_error -> 'mean' >= 0,evaluated_nodes,plan_nodes,exec_time>0,nexecs
+SELECT
+  query, avg_error -> 'mean' >= 0., evaluated_nodes, plan_nodes,
+  exec_time -> 'mean' > 0., nexecs
 FROM pg_track_optimizer()
 ORDER BY query COLLATE "C"; -- Nothing to track for plain explain.
 
 EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
 SELECT * FROM pto_test WHERE x < 1;
-SELECT query, avg_error -> 'mean' >= 0,evaluated_nodes,plan_nodes,exec_time>0,nexecs
+SELECT
+  query, avg_error -> 'mean' >= 0., evaluated_nodes, plan_nodes,
+  exec_time -> 'mean' > 0., nexecs
 FROM pg_track_optimizer()
 ORDER BY query; -- Must see it.
 -- TODO: Disable storing of queries, involving the extension UI objects
 
 SELECT * FROM pto_test WHERE x < 1;
 -- Must see second execution of the query in nexecs (don't mind EXPLAIN)
-SELECT query, avg_error -> 'mean' >= 0,evaluated_nodes,plan_nodes,exec_time>0,nexecs
+SELECT
+  query, avg_error -> 'mean' >= 0., evaluated_nodes, plan_nodes,
+  exec_time -> 'mean' > 0., nexecs
 FROM pg_track_optimizer()
 ORDER BY query;
 
