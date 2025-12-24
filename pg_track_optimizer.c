@@ -643,29 +643,6 @@ PG_FUNCTION_INFO_V1(to_flush);
 static const uint32 DATA_FILE_HEADER	= 12354678;
 static const uint32 DATA_FORMAT_VERSION = 1;
 
-static const DSMOptimizerTrackerEntry EOFEntry = {
-											.key.dbOid = 0,
-											.key.queryId = 0,
-											.evaluated_nodes = -1,
-											.plan_nodes = -1,
-											.avg_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
-											.rms_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
-											.twa_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
-											.wca_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
-											.blks_accessed = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
-											.exec_time = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
-											.nexecs = -1,
-											.query_ptr = 0
-											};
-#define IsEOFEntry(entry) ( \
-	(entry)->key.dbOid == EOFEntry.key.dbOid && \
-	(entry)->key.queryId == EOFEntry.key.queryId && \
-	(entry)->query_ptr == EOFEntry.query_ptr && \
-	(entry)->evaluated_nodes == EOFEntry.evaluated_nodes && \
-	(entry)->plan_nodes == EOFEntry.plan_nodes && \
-	(entry)->nexecs == EOFEntry.nexecs \
-)
-
 #define EXTENSION_NAME "pg_track_optimizer"
 static const char *filename = EXTENSION_NAME".stat";
 
@@ -683,6 +660,7 @@ _flush_hash_table(void)
 	char					   *tmpfile = psprintf("%s.tmp", EXTENSION_NAME);
 	FILE					   *file;
 	uint32						counter = 0;
+	uint32						nrecs;
 
 	if (!IsUnderPostmaster)
 		return false;
@@ -691,9 +669,17 @@ _flush_hash_table(void)
 	if (file == NULL)
 		goto error;
 
+	/*
+	 * htab_counter now is quite reliable entity. So, use it dumping the HTAB.
+	 * According to paranoidal tradition, let's check consistency at the end
+	 * by comparing with the counter.
+	 */
+	nrecs = pg_atomic_read_u32(&shared->htab_counter);
+
 	/* Add a header to the file for more reliable identification of the data */
 	if (fwrite(&DATA_FILE_HEADER, sizeof(uint32), 1, file) != 1 ||
-		fwrite(&DATA_FORMAT_VERSION, sizeof(uint32), 1, file) != 1)
+		fwrite(&DATA_FORMAT_VERSION, sizeof(uint32), 1, file) != 1 ||
+		fwrite(&nrecs, sizeof(uint32), 1, file) != 1)
 		goto error;
 
 	dshash_seq_init(&stat, htab, true);
@@ -723,10 +709,7 @@ _flush_hash_table(void)
 	}
 	dshash_seq_term(&stat);
 
-	/* As the last record, write an EOF record and the number of records that have been written */
-	if (fwrite(&EOFEntry, sizeof(DSMOptimizerTrackerEntry), 1, file) != 1 ||
-		fwrite(&counter, sizeof(uint32), 1, file) != 1)
-		goto error;
+	Assert(counter == nrecs);
 
 	if (FreeFile(file))
 	{
@@ -767,8 +750,12 @@ _load_hash_table(TODSMRegistry *state)
 	uint32						counter = 0;
 	DSMOptimizerTrackerEntry	disk_entry;
 	DSMOptimizerTrackerEntry   *entry;
+	uint32						nrecs;
 
 	track_attach_shmem();
+
+	/* We load data into an empty hash table */
+	Assert(pg_atomic_read_u32(&state->htab_counter) == 0);
 
 	file = AllocateFile(filename, PG_BINARY_R);
 	if (file == NULL)
@@ -780,12 +767,15 @@ _load_hash_table(TODSMRegistry *state)
 	}
 
 	if (fread(&header, sizeof(uint32), 1, file) != 1 ||
-		fread(&pgver, sizeof(uint32), 1, file) != 1)
+		fread(&pgver, sizeof(uint32), 1, file) != 1 ||
+		fread(&nrecs, sizeof(uint32), 1, file) != 1)
 		goto read_error;
 	if (header != DATA_FILE_HEADER)
 		goto data_header_error;
 	if (pgver != DATA_FORMAT_VERSION)
 		goto data_version_error;
+
+	Assert(nrecs >= 0);
 
 	while (!feof(file))
 	{
@@ -796,23 +786,6 @@ _load_hash_table(TODSMRegistry *state)
 		/* First step - read the record */
 		if (fread(&disk_entry, sizeof(DSMOptimizerTrackerEntry), 1, file) != 1)
 			goto read_error;
-
-		/* Check last record */
-		if (IsEOFEntry(&disk_entry))
-		{
-			uint32 cnt;
-
-			if (fread(&cnt, sizeof(uint32), 1, file) != 1)
-				goto read_error;
-
-			if (cnt != counter)
-				elog(ERROR,
-					 "[%s] incorrect number of records read: %u instead of %u",
-					 EXTENSION_NAME, counter, cnt);
-
-			/* Correct finish of the load operation */
-			break;
-		}
 
 		/* The case of next entry */
 
@@ -853,6 +826,8 @@ _load_hash_table(TODSMRegistry *state)
 		dshash_release_lock(htab, entry);
 		counter++;
 	}
+
+	Assert(counter == nrecs);
 
 	FreeFile(file);
 	pg_atomic_write_u32(&state->htab_counter, counter);
