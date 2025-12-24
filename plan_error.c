@@ -220,11 +220,14 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	ctx->nnodes = 0;
 	ctx->counter = 0;
 
-	/* Collect buffer usage statistics from this execution (sum of all types) */
+	/*
+	 * Collect buffer usage statistics from this execution (summarise permanent
+	 * and temp tables blocks types).
+	 * For the sake of optimisation preciseness we don't differ blocks found in
+	 * memory and fetched from the disk - the optimiser doesn't predict that.
+	 */
 	ctx->blks_accessed = queryDesc->totaltime->bufusage.shared_blks_hit +
 						 queryDesc->totaltime->bufusage.shared_blks_read +
-						 queryDesc->totaltime->bufusage.local_blks_hit +
-						 queryDesc->totaltime->bufusage.local_blks_read +
 						 queryDesc->totaltime->bufusage.temp_blks_read +
 						 queryDesc->totaltime->bufusage.temp_blks_written;
 
