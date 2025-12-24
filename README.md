@@ -142,22 +142,22 @@ LIMIT 10;
 |--------|------|-------------|
 | `queryid` | bigint | Internal PostgreSQL query identifier (same as in pg_stat_statements) |
 | `query` | text | The SQL query (normalised, with literals replaced by `$1`, `$2`, etc.) |
-| `avg_error` | rstats | Simple average of log-scale errors across plan nodes per execution. Tracks running statistics of average error values across query executions. The view exposes this as `avg_min`, `avg_max`, `avg_cnt`, `avg_avg`, and `avg_dev` columns. Use the `->` operator on the raw function output to access fields: `avg_error -> 'mean'`, `avg_error -> 'stddev'`, etc. |
-| `rms_error` | rstats | Root Mean Square (RMS) error per execution. Tracks running statistics of RMS error values across query executions. The view exposes this as `rms_min`, `rms_max`, `rms_cnt`, `rms_avg`, and `rms_dev` columns. Use the `->` operator on the raw function output to access fields: `rms_error -> 'mean'`, `rms_error -> 'stddev'`, etc. |
-| `twa_error` | rstats | Time-Weighted Average (TWA) error per execution. Tracks running statistics of TWA error values across query executions. The view exposes this as `twa_min`, `twa_max`, `twa_cnt`, `twa_avg`, and `twa_dev` columns. Use the `->` operator on the raw function output to access fields: `twa_error -> 'mean'`, `twa_error -> 'stddev'`, etc. |
-| `wca_error` | rstats | Cost-Weighted Average (WCA) error per execution. Tracks running statistics of WCA error values across query executions. The view exposes this as `wca_min`, `wca_max`, `wca_cnt`, `wca_avg`, and `wca_dev` columns. Use the `->` operator on the raw function output to access fields: `wca_error -> 'mean'`, `wca_error -> 'stddev'`, etc. |
-| `blks_accessed` | rstats | Running statistics of blocks accessed per execution. The view exposes this as `blks_min`, `blks_max`, `blks_cnt`, `blks_avg`, and `blks_dev` columns. Use the `->` operator on the raw function output to access fields: `blks_accessed -> 'mean'`, `blks_accessed -> 'stddev'`, etc. |
-| `local_blks` | rstats | Running statistics of local blocks (read + written + dirtied) per execution. Local blocks indicate temporary tables or sorts spilling to disk, signaling insufficient work_mem. The view exposes this as `local_min`, `local_max`, `local_cnt`, `local_avg`, and `local_dev` columns. Use the `->` operator on the raw function output to access fields: `local_blks -> 'mean'`, `local_blks -> 'stddev'`, etc. |
-| `exec_time` | rstats | Execution time per query in milliseconds. Tracks running statistics of execution times across query executions. The view exposes this as `time_min`, `time_max`, `time_cnt`, `time_avg`, and `time_dev` columns. Use the `->` operator on the raw function output to access fields: `exec_time -> 'mean'`, `exec_time -> 'stddev'`, etc. |
+| `avg_error` | rstats | Simple average of log-scale errors across plan nodes per execution. Tracks running statistics of average error values across query executions. |
+| `rms_error` | rstats | Root Mean Square (RMS) error per execution. Tracks running statistics of RMS error values across query executions. |
+| `twa_error` | rstats | Time-Weighted Average (TWA) error per execution. Tracks running statistics of TWA error values across query executions. |
+| `wca_error` | rstats | Cost-Weighted Average (WCA) error per execution. Tracks running statistics of WCA error values across query executions. |
+| `blks_accessed` | rstats | Running statistics of blocks accessed per execution. |
+| `local_blks` | rstats | Running statistics of local blocks (read + written + dirtied) per execution. Local blocks indicate temporary tables or sorts spilling to disk, signaling insufficient work_mem. |
+| `exec_time` | rstats | Execution time per query in milliseconds. Tracks running statistics of execution times across query executions. |
 | `evaluated_nodes` | integer | Number of plan nodes analysed |
 | `plan_nodes` | integer | Total plan nodes (some may be skipped, e.g., never-executed branches) |
 | `nexecs` | bigint | Number of times the query was executed |
 
-> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `avg_error`, `rms_error`, `twa_error`, `wca_error`, `blks_accessed`, and `local_blks` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
+> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `blks_accessed`, and `local_blks` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
 
-### The rstats Type
+### The RStats Type
 
-The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `avg_error`, `rms_error`, `twa_error`, `wca_error`, `blks_accessed`, `local_blks`, and `exec_time` columns to provide detailed statistics about all error metrics, block access patterns, local block usage (work_mem indicator), and execution times across multiple query executions.
+The `RStats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `avg_error`, `rms_error`, `twa_error`, `wca_error`, `blks_accessed`, `local_blks`, and `exec_time` columns to provide detailed statistics about all error metrics, block access patterns, local block usage (work_mem indicator), and execution times across multiple query executions.
 
 **Fields accessible via the `->` operator:**
 - `count`: Number of observations
@@ -188,7 +188,7 @@ WHERE wca_avg > 2.0
 ORDER BY wca_avg DESC;
 ```
 
-The rstats type maintains numerically stable incremental statistics, automatically updating mean, variance, min, and max as new values are accumulated. This provides richer statistical insight than simple totals or averages, especially useful for understanding the variability in query performance and cardinality estimation across multiple executions.
+The RStats type maintains numerically stable incremental statistics, automatically updating mean, variance, min, and max as new values are accumulated. This provides richer statistical insight than simple totals or averages, especially useful for understanding the variability in query performance and cardinality estimation across multiple executions.
 
 ### Managing Statistics
 
@@ -211,29 +211,19 @@ Indicates consistent estimation errors across the plan. Possible causes:
 - **Complex predicates**: Non-linear filters that statistics can't capture
 
 ### High `rms_avg` (RMS error)
-Suggests a few plan nodes with very large errors. Often indicates:
-- **Wrong join order**: Planner underestimated join result size
-- **Poor index choice**: Estimated selectivity was far off
-- **Partition pruning failure**: Planner scanned more partitions than needed
+Suggests a few plan nodes with huge errors.
 
 ### High `twa_avg` (time-weighted average error)
-Shows that estimation errors occurred in the most time-consuming parts of the plan:
-- **Sequential scans with wrong row estimates**: Should have used an index
-- **Nested loops with underestimated inner rows**: Should have used hash join
-- **Sorts with wrong cardinality**: Allocated insufficient work_mem
+Normalises estimation error over execution time. Allows comparing queries with very different execution times.
 
 ### High `wca_avg` (cost-weighted average error)
-Indicates estimation errors in nodes the planner considered expensive. This can reveal:
-- **Misalignment between cost model and reality**: Planner's cost estimates don't match actual execution patterns
-- **Index vs sequential scan decisions**: Wrong cost estimates led to poor access method choices
-- **Join method selection**: Planner overestimated cost of certain join types
+Normalises estimation error over cost. It should help compare the estimation errors of queries with very different structures.
 
 ### High `local_avg` (local blocks)
-Indicates queries using local blocks, which signals work_mem issues rather than optimization problems:
+Indicates queries using local blocks, which signal work_mem issues rather than optimisation problems:
 - **Insufficient work_mem**: Sorts, hash joins, or aggregates spilling to disk
-- **Temporary table usage**: Queries creating or using temporary tables
 - **Memory-intensive operations**: Queries with high memory requirements exceeding work_mem
-- **Quick fix**: Unlike optimization errors, this can often be resolved by simply increasing work_mem
+- **Quick fix**: Unlike optimisation errors, this can often be resolved by simply increasing work_mem
 
 ## Example Workflow
 
