@@ -24,11 +24,11 @@ For each plan node, it calculates the relative error using logarithmic scale:
 error = |log(actual_rows / estimated_rows)|
 ```
 
-Four error metrics are computed:
+Four error metrics are computed (all as rstats cumulative types tracking running statistics across executions):
 - **avg_error**: Simple average across all plan nodes
 - **rms_error**: Root Mean Square (RMS) - emphasises large errors
-- **twa_error**: Time-Weighted Average (TWA) - cumulative statistics highlighting errors in time-consuming nodes
-- **wca_error**: Cost-Weighted Average (WCA) - cumulative statistics highlighting errors in high-cost nodes according to the planner
+- **twa_error**: Time-Weighted Average (TWA) - highlighting errors in time-consuming nodes
+- **wca_error**: Cost-Weighted Average (WCA) - highlighting errors in high-cost nodes according to the planner
 
 Queries with high error values are candidates for investigation: missing indexes, outdated statistics, or planner limitations.
 
@@ -113,8 +113,8 @@ SET pg_track_optimizer.hash_mem = 10240;
 SELECT
     queryid,
     query,
-    avg_error,
-    rms_error,
+    avg_avg, avg_min, avg_max,  -- avg_error expanded fields
+    rms_avg, rms_min, rms_max,  -- rms_error expanded fields
     twa_avg, twa_min, twa_max,  -- twa_error expanded fields
     wca_avg, wca_min, wca_max,  -- wca_error expanded fields
     blks_avg, blks_min, blks_max,  -- blks_accessed expanded fields
@@ -123,24 +123,24 @@ SELECT
     exec_time,
     nexecs
 FROM pg_track_optimizer
-ORDER BY avg_error DESC
+ORDER BY avg_avg DESC
 LIMIT 10;
 ```
 
 **Example output:**
 ```
-   queryid   |                    query                         | avg_error | rms_error | twa_avg | twa_min | twa_max | wca_avg | wca_min | wca_max | blks_avg | blks_min | blks_max | evaluated_nodes | plan_nodes | exec_time | nexecs
--------------+--------------------------------------------------+-----------+-----------+---------+---------+---------+---------+---------+---------+----------+----------+----------+-----------------+------------+-----------+--------
- 42387612345 | SELECT * FROM orders WHERE customer_id = $1      |      4.23 |      4.89 |    4.56 |    3.21 |    5.78 |    3.87 |    2.45 |    4.92 |    28456 |    24000 |    32000 |               5 |          7 |   1523.45 |    142
- 98765432109 | SELECT COUNT(*) FROM products WHERE category...  |      3.87 |      4.12 |    3.95 |    3.12 |    4.56 |    4.21 |    3.45 |    5.12 |     5632 |     4800 |     6400 |               3 |          4 |    234.12 |     23
+   queryid   |                    query                         | avg_avg | avg_min | avg_max | rms_avg | rms_min | rms_max | twa_avg | twa_min | twa_max | wca_avg | wca_min | wca_max | blks_avg | blks_min | blks_max | evaluated_nodes | plan_nodes | exec_time | nexecs
+-------------+--------------------------------------------------+---------+---------+---------+---------+---------+---------+---------+---------+---------+---------+---------+---------+----------+----------+----------+-----------------+------------+-----------+--------
+ 42387612345 | SELECT * FROM orders WHERE customer_id = $1      |    4.23 |    3.89 |    4.67 |    4.89 |    4.12 |    5.34 |    4.56 |    3.21 |    5.78 |    3.87 |    2.45 |    4.92 |    28456 |    24000 |    32000 |               5 |          7 |   1523.45 |    142
+ 98765432109 | SELECT COUNT(*) FROM products WHERE category...  |    3.87 |    3.45 |    4.21 |    4.12 |    3.78 |    4.56 |    3.95 |    3.12 |    4.56 |    4.21 |    3.45 |    5.12 |     5632 |     4800 |     6400 |               3 |          4 |    234.12 |     23
 ```
 
 ### Column Descriptions
 
 - **queryid**: Internal PostgreSQL query identifier (same as in pg_stat_statements)
 - **query**: The SQL query (normalised, with literals replaced by `$1`, `$2`, etc.)
-- **avg_error**: Simple average of log-scale errors across plan nodes
-- **rms_error**: Root Mean Square (RMS) error - emphasises large estimation errors
+- **avg_error**: Simple average of log-scale errors across plan nodes per execution (rstats type). Tracks running statistics of average error values across query executions. The view exposes this as `avg_min`, `avg_max`, `avg_cnt`, `avg_avg`, and `avg_dev` columns. Use the `->` operator on the raw function output to access fields: `avg_error -> 'mean'`, `avg_error -> 'stddev'`, etc.
+- **rms_error**: Root Mean Square (RMS) error per execution (rstats type). Tracks running statistics of RMS error values across query executions. The view exposes this as `rms_min`, `rms_max`, `rms_cnt`, `rms_avg`, and `rms_dev` columns. Use the `->` operator on the raw function output to access fields: `rms_error -> 'mean'`, `rms_error -> 'stddev'`, etc.
 - **twa_error**: Time-Weighted Average (TWA) error per execution (rstats type). Tracks running statistics of TWA error values across query executions. The view exposes this as `twa_min`, `twa_max`, `twa_cnt`, `twa_avg`, and `twa_dev` columns. Use the `->` operator on the raw function output to access fields: `twa_error -> 'mean'`, `twa_error -> 'stddev'`, etc.
 - **wca_error**: Cost-Weighted Average (WCA) error per execution (rstats type). Tracks running statistics of WCA error values across query executions. The view exposes this as `wca_min`, `wca_max`, `wca_cnt`, `wca_avg`, and `wca_dev` columns. Use the `->` operator on the raw function output to access fields: `wca_error -> 'mean'`, `wca_error -> 'stddev'`, etc.
 - **evaluated_nodes**: Number of plan nodes analysed
@@ -149,11 +149,11 @@ LIMIT 10;
 - **nexecs**: Number of times the query was executed
 - **blks_accessed**: Running statistics of blocks accessed per execution (rstats type). The view exposes this as `blks_min`, `blks_max`, `blks_cnt`, `blks_avg`, and `blks_dev` columns. Use the `->` operator on the raw function output to access fields: `blks_accessed -> 'mean'`, `blks_accessed -> 'stddev'`, etc.
 
-> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `twa_error`, `wca_error`, and `blks_accessed` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
+> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `avg_error`, `rms_error`, `twa_error`, `wca_error`, and `blks_accessed` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
 
 ### The rstats Type
 
-The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `twa_error`, `wca_error`, and `blks_accessed` columns to provide detailed statistics about time-weighted errors, cost-weighted errors, and block access patterns across multiple query executions.
+The `rstats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `avg_error`, `rms_error`, `twa_error`, `wca_error`, and `blks_accessed` columns to provide detailed statistics about all error metrics and block access patterns across multiple query executions.
 
 **Fields accessible via the `->` operator:**
 - `count`: Number of observations
@@ -200,25 +200,25 @@ Statistics persist in shared memory until `pg_track_optimizer_reset()` is called
 
 ## Interpreting Results
 
-### High `avg_error`
+### High `avg_avg` (average error)
 Indicates consistent estimation errors across the plan. Possible causes:
 - **Outdated statistics**: Run `ANALYZE` on affected tables
 - **Data correlation**: Planner assumes independence between columns
 - **Complex predicates**: Non-linear filters that statistics can't capture
 
-### High `rms_error`
+### High `rms_avg` (RMS error)
 Suggests a few plan nodes with very large errors. Often indicates:
 - **Wrong join order**: Planner underestimated join result size
 - **Poor index choice**: Estimated selectivity was far off
 - **Partition pruning failure**: Planner scanned more partitions than needed
 
-### High `twa_error`
+### High `twa_avg` (time-weighted average error)
 Shows that estimation errors occurred in the most time-consuming parts of the plan:
 - **Sequential scans with wrong row estimates**: Should have used an index
 - **Nested loops with underestimated inner rows**: Should have used hash join
 - **Sorts with wrong cardinality**: Allocated insufficient work_mem
 
-### High `wca_error`
+### High `wca_avg` (cost-weighted average error)
 Indicates estimation errors in nodes the planner considered expensive. This can reveal:
 - **Misalignment between cost model and reality**: Planner's cost estimates don't match actual execution patterns
 - **Index vs sequential scan decisions**: Wrong cost estimates led to poor access method choices
@@ -240,11 +240,11 @@ The extension will automatically track queries exceeding the error threshold. Pr
 ```sql
 SELECT
     query,
-    avg_error,
+    avg_error -> 'mean' AS avg_avg,
     nexecs,
     exec_time / nexecs AS avg_time_ms
 FROM pg_track_optimizer()
-WHERE avg_error > 2.0
+WHERE avg_error -> 'mean' > 2.0
 ORDER BY exec_time DESC;
 ```
 

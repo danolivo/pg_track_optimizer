@@ -52,7 +52,7 @@ WHERE join_outer.val + join_inner.val > 5;
 -- The evaluated_nodes should include the join node with filtered tuples
 SELECT
   query,
-  ROUND(avg_error::numeric,1) AS error,
+  ROUND((avg_error -> 'mean')::numeric,1) AS error,
   evaluated_nodes,
   plan_nodes,
   nexecs

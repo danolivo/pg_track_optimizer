@@ -5,8 +5,16 @@ CREATE EXTENSION pg_track_optimizer;
 -----------------+------------------+-----------+----------+---------
  queryid         | bigint           |           |          | 
  query           | text             |           |          | 
- avg_error       | double precision |           |          | 
- rms_error       | double precision |           |          | 
+ avg_min         | double precision |           |          | 
+ avg_max         | double precision |           |          | 
+ avg_cnt         | double precision |           |          | 
+ avg_avg         | double precision |           |          | 
+ avg_dev         | double precision |           |          | 
+ rms_min         | double precision |           |          | 
+ rms_max         | double precision |           |          | 
+ rms_cnt         | double precision |           |          | 
+ rms_avg         | double precision |           |          | 
+ rms_dev         | double precision |           |          | 
  twa_min         | double precision |           |          | 
  twa_max         | double precision |           |          | 
  twa_cnt         | double precision |           |          | 
