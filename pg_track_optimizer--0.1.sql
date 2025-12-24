@@ -124,9 +124,9 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT twa_error		rstats,
 	OUT wca_error		rstats,
 	OUT blks_accessed   rstats,
+	OUT exec_time       rstats,
 	OUT evaluated_nodes integer,
 	OUT plan_nodes      integer,
-	OUT exec_time       float8,
 	OUT nexecs          bigint
 )
 RETURNS setof record
@@ -165,7 +165,12 @@ CREATE VIEW pg_track_optimizer AS SELECT
   t.blks_accessed -> 'count' AS blks_cnt,
   t.blks_accessed -> 'mean' AS blks_avg, t.blks_accessed -> 'stddev' AS blks_dev,
 
-  t.evaluated_nodes, t.plan_nodes, t.exec_time, t.nexecs
+  /* Execution time statistics (milliseconds) */
+  t.exec_time -> 'min' AS time_min, t.exec_time -> 'max' AS time_max,
+  t.exec_time -> 'count' AS time_cnt,
+  t.exec_time -> 'mean' AS time_avg, t.exec_time -> 'stddev' AS time_dev,
+
+  t.evaluated_nodes, t.plan_nodes, t.nexecs
 FROM pg_track_optimizer() t, pg_database d
 WHERE t.dboid = d.oid AND datname = current_database();
 COMMENT ON VIEW pg_track_optimizer IS 'query tracking data for current database';

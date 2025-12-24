@@ -98,7 +98,7 @@ typedef struct DSMOptimizerTrackerEntry
 	RStats					twa_error;			/* Time-weighted average error - running stats */
 	RStats					wca_error;			/* Weighted Cost Average error - running stats */
 	RStats					blks_accessed;		/* Block I/O (hits + reads + writes) - running stats */
-	double					exec_time;			/* Total execution time across all runs (seconds) */
+	RStats					exec_time;			/* Execution time per query - running stats (milliseconds) */
 	int64					nexecs;				/* Number of executions tracked */
 
 	/* Metadata */
@@ -374,8 +374,8 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		rstats_set_empty(&entry->twa_error);
 		rstats_set_empty(&entry->wca_error);
 		rstats_set_empty(&entry->blks_accessed);
+		rstats_set_empty(&entry->exec_time);
 
-		entry->exec_time = 0.0;
 		entry->nexecs = 0;
 
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
@@ -404,7 +404,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 	/* Accumulate execution-level totals */
 	Assert(ctx->totaltime >= 0.);
-	entry->exec_time += ctx->totaltime;
+	rstats_add_value(&entry->exec_time, ctx->totaltime * 1000.); /* sec -> msec */
 	entry->nexecs++;
 
 	dshash_release_lock(htab, entry);
@@ -599,10 +599,10 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 		values[i++] = RStatsPGetDatum(&entry->twa_error);
 		values[i++] = RStatsPGetDatum(&entry->wca_error);
 		values[i++] = RStatsPGetDatum(&entry->blks_accessed);
+		values[i++] = RStatsPGetDatum(&entry->exec_time);
 
 		values[i++] = Int32GetDatum(entry->evaluated_nodes);
 		values[i++] = Int32GetDatum(entry->plan_nodes);
-		values[i++] = Float8GetDatum(entry->exec_time * 1000.); /* sec -> msec */
 		values[i++] = Int64GetDatum(entry->nexecs);
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
@@ -685,7 +685,7 @@ static const DSMOptimizerTrackerEntry EOFEntry = {
 											.twa_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
 											.wca_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
 											.blks_accessed = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
-											.exec_time = -1.,
+											.exec_time = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
 											.nexecs = -1,
 											.query_ptr = 0
 											};
@@ -878,7 +878,7 @@ _load_hash_table(TODSMRegistry *state)
 		memcpy(&entry->twa_error, &disk_entry.twa_error, sizeof(RStats));
 		memcpy(&entry->wca_error, &disk_entry.wca_error, sizeof(RStats));
 		memcpy(&entry->blks_accessed, &disk_entry.blks_accessed, sizeof(RStats));
-		entry->exec_time = disk_entry.exec_time;
+		memcpy(&entry->exec_time, &disk_entry.exec_time, sizeof(RStats));
 		entry->nexecs = disk_entry.nexecs;
 		entry->query_ptr = disk_entry.query_ptr;
 
