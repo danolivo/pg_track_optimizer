@@ -525,39 +525,6 @@ _PG_init(void)
  *
  */
 
-static void
-_init_rsinfo(PG_FUNCTION_ARGS, ReturnSetInfo *rsinfo, int total_ncols)
-{
-	MemoryContext	 oldcontext;
-	TupleDesc		 tup_desc;
-
-	/* check to see if caller supports us returning a tuplestore */
-	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("set-valued function called in context that cannot accept a set")));
-	if (!(rsinfo->allowedModes & SFRM_Materialize))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("materialize mode required, but it is not allowed in this context")));
-
-	/* Switch into long-lived context to construct returned data structures */
-	oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
-
-	/* Build a tuple descriptor for our result type */
-	if (get_call_result_type(fcinfo, NULL, &tup_desc) != TYPEFUNC_COMPOSITE)
-		elog(ERROR, "return type must be a row type");
-
-	if (tup_desc->natts != total_ncols)
-		elog(ERROR, "incorrect number of output arguments");
-
-	rsinfo->returnMode = SFRM_Materialize;
-	rsinfo->setResult = tuplestore_begin_heap(true, false, work_mem);
-	rsinfo->setDesc = tup_desc;
-
-	MemoryContextSwitchTo(oldcontext);
-}
-
 PG_FUNCTION_INFO_V1(pg_track_optimizer);
 PG_FUNCTION_INFO_V1(to_reset);
 
@@ -572,8 +539,9 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 
 	track_attach_shmem();
 
+	InitMaterializedSRF(fcinfo, 0);
+
 	LWLockAcquire(&shared->lock, LW_SHARED);
-	_init_rsinfo(fcinfo, rsinfo, DATATBL_NCOLS);
 
 	dshash_seq_init(&stat, htab, true);
 	while ((entry = dshash_seq_next(&stat)) != NULL)
