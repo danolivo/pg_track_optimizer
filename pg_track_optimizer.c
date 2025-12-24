@@ -390,8 +390,9 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	 * accumulated when non-negative. Negative values can occur legitimately when
 	 * calculations produce undefined results (e.g., division by zero cost in wca_error).
 	 *
-	 * blks_accessed: Always accumulated. Block access counts are always >= 0
-	 * and represent valid physical I/O measurements for every execution.
+	 * blks_accessed & local_blks: Always accumulated. Block access counts are
+	 * always >= 0 and represent valid physical I/O measurements for every
+	 * execution.
 	 */
 	if (ctx->avg_error >= 0.)
 		rstats_add_value(&entry->avg_error, ctx->avg_error);
