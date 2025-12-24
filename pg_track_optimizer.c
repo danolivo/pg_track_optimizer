@@ -89,12 +89,12 @@ typedef struct DSMOptimizerTrackerEntry
 	DSMOptimizerTrackerKey	key;
 
 	/* Per-execution statistics (most recent execution only - snapshots) */
-	double					avg_error;			/* Average estimation error (last execution) */
-	double					rms_error;			/* Root mean square error (last execution) */
 	int32					evaluated_nodes;	/* Number of plan nodes evaluated (last execution) */
 	int32					plan_nodes;			/* Total number of plan nodes (last execution) */
 
 	/* Cumulative statistics (accumulated across all executions) */
+	RStats					avg_error;			/* Average estimation error - running stats */
+	RStats					rms_error;			/* Root mean square error - running stats */
 	RStats					twa_error;			/* Time-weighted average error - running stats */
 	RStats					wca_error;			/* Weighted Cost Average error - running stats */
 	RStats					blks_accessed;		/* Block I/O (hits + reads + writes) - running stats */
@@ -347,17 +347,10 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	/*
 	 * Store per-execution statistics (most recent execution only).
 	 * These values are overwritten on each execution, showing only the latest
-	 * query execution metrics. Unlike the cumulative fields below (twa_error,
-	 * wca_error, blks_accessed), these are point-in-time snapshots.
-	 *
-	 * TODO: Consider converting these to cumulative statistics as well for
-	 * better trend analysis over multiple executions.
+	 * query execution metrics.
 	 */
 	entry->evaluated_nodes = ctx->nnodes;
 	entry->plan_nodes = ctx->counter;
-
-	entry->avg_error = ctx->avg_error;
-	entry->rms_error = ctx->rms_error;
 
 	if (!found)
 	{
@@ -376,6 +369,8 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		 * rstats_add_value(). The empty state uses sentinel values (-1)
 		 * to indicate no data has been accumulated yet.
 		 */
+		rstats_set_empty(&entry->avg_error);
+		rstats_set_empty(&entry->rms_error);
 		rstats_set_empty(&entry->twa_error);
 		rstats_set_empty(&entry->wca_error);
 		rstats_set_empty(&entry->blks_accessed);
@@ -389,17 +384,17 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	/*
 	 * Accumulate cumulative statistics across executions.
 	 *
-	 * twa_error (Time-Weighted Average error): Always accumulated when non-negative.
-	 * This error metric weights estimation errors by execution time, giving more
-	 * importance to longer-running queries.
-	 *
-	 * wca_error (Weighted Cost Average error): Only accumulated when non-negative.
-	 * Negative values can occur legitimately when cost-based weighting produces
-	 * undefined results (e.g., division by zero cost), so we skip those cases.
+	 * All error metrics (avg_error, rms_error, twa_error, wca_error) are only
+	 * accumulated when non-negative. Negative values can occur legitimately when
+	 * calculations produce undefined results (e.g., division by zero cost in wca_error).
 	 *
 	 * blks_accessed: Always accumulated. Block access counts are always >= 0
 	 * and represent valid physical I/O measurements for every execution.
 	 */
+	if (ctx->avg_error >= 0.)
+		rstats_add_value(&entry->avg_error, ctx->avg_error);
+	if (ctx->rms_error >= 0.)
+		rstats_add_value(&entry->rms_error, ctx->rms_error);
 	if (ctx->twa_error >= 0.)
 		rstats_add_value(&entry->twa_error, ctx->twa_error);
 	if (ctx->wca_error >= 0.)
@@ -598,11 +593,9 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 		str = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
 		values[i++] = CStringGetTextDatum(str);
 
-		/* Fill-in reference statistics fields */
-		values[i++] = Float8GetDatum(entry->avg_error);
-		values[i++] = Float8GetDatum(entry->rms_error);
-
 		/* Fill-in cumulative statistics fields */
+		values[i++] = RStatsPGetDatum(&entry->avg_error);
+		values[i++] = RStatsPGetDatum(&entry->rms_error);
 		values[i++] = RStatsPGetDatum(&entry->twa_error);
 		values[i++] = RStatsPGetDatum(&entry->wca_error);
 		values[i++] = RStatsPGetDatum(&entry->blks_accessed);
@@ -685,10 +678,10 @@ static const uint32 DATA_FORMAT_VERSION = 1;
 static const DSMOptimizerTrackerEntry EOFEntry = {
 											.key.dbOid = 0,
 											.key.queryId = 0,
-											.avg_error = -2.,
-											.rms_error = -2.,
 											.evaluated_nodes = -1,
 											.plan_nodes = -1,
+											.avg_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
+											.rms_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
 											.twa_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
 											.wca_error = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
 											.blks_accessed = {.count = -1, .mean = 0.0, .m2 = 0.0, .min = 0.0, .max = 0.0},
@@ -878,10 +871,10 @@ _load_hash_table(TODSMRegistry *state)
 		 * TODO: copy all data in one operation. At least we will not do
 		 * annoying copy DSM pointer.
 		 */
-		entry->avg_error = disk_entry.avg_error;
-		entry->rms_error = disk_entry.rms_error;
 		entry->evaluated_nodes = disk_entry.evaluated_nodes;
 		entry->plan_nodes = disk_entry.plan_nodes;
+		memcpy(&entry->avg_error, &disk_entry.avg_error, sizeof(RStats));
+		memcpy(&entry->rms_error, &disk_entry.rms_error, sizeof(RStats));
 		memcpy(&entry->twa_error, &disk_entry.twa_error, sizeof(RStats));
 		memcpy(&entry->wca_error, &disk_entry.wca_error, sizeof(RStats));
 		memcpy(&entry->blks_accessed, &disk_entry.blks_accessed, sizeof(RStats));

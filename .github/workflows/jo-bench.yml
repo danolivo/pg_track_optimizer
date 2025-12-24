@@ -177,9 +177,9 @@ jobs:
         psql -d jobench -c "
           SELECT
             COUNT(*) as total_queries,
-            ROUND(AVG(avg_error)::numeric, 2) as avg_error_mean,
-            ROUND(MAX(avg_error)::numeric, 2) as max_avg_error,
-            ROUND(AVG(rms_error)::numeric, 2) as rms_error_mean,
+            ROUND(AVG(avg_avg)::numeric, 2) as avg_error_mean,
+            ROUND(MAX(avg_avg)::numeric, 2) as max_avg_error,
+            ROUND(AVG(rms_avg)::numeric, 2) as rms_error_mean,
             ROUND(AVG(twa_avg)::numeric, 2) as twa_error_mean,
             ROUND(AVG(wca_avg)::numeric, 2) as wca_error_mean,
             SUM(blks_avg) as total_blks_avg,
@@ -194,15 +194,16 @@ jobs:
         psql -d jobench -c "
           SELECT
             LEFT(query, 80) as query_preview,
-            ROUND(avg_error::numeric, 2) as avg_error,
-            ROUND(rms_error::numeric, 2) as rms_error,
+            avg_avg,avg_min,avg_max,avg_cnt,avg_dev,
+            rms_avg,rms_min,rms_max,rms_cnt,rms_dev,
+            twa_avg,twa_min,twa_max,twa_cnt,twa_dev,
             wca_avg,wca_min,wca_max,wca_cnt,wca_dev,
             blks_avg,blks_min,blks_max,blks_cnt,blks_dev,
             evaluated_nodes, plan_nodes,
             ROUND(exec_time::numeric, 2) as exec_time_ms,
             nexecs
           FROM pg_track_optimizer
-          ORDER BY avg_error DESC
+          ORDER BY avg_avg DESC
           LIMIT 10;
         "
 
@@ -215,8 +216,8 @@ jobs:
         # Execute the benchmark query and save to temp file
         psql -d jobench -c "
           WITH
-            top_avg AS (SELECT queryid FROM pg_track_optimizer ORDER BY avg_error DESC LIMIT 10),
-            top_rms AS (SELECT queryid FROM pg_track_optimizer ORDER BY rms_error DESC LIMIT 10),
+            top_avg AS (SELECT queryid FROM pg_track_optimizer ORDER BY avg_avg DESC LIMIT 10),
+            top_rms AS (SELECT queryid FROM pg_track_optimizer ORDER BY rms_avg DESC LIMIT 10),
             top_twa AS (SELECT queryid FROM pg_track_optimizer ORDER BY twa_avg DESC LIMIT 10),
             top_wca AS (SELECT queryid FROM pg_track_optimizer ORDER BY wca_avg DESC LIMIT 10),
             intersection AS (
@@ -228,13 +229,15 @@ jobs:
               INTERSECT
               SELECT queryid FROM top_wca
             )
-          SELECT v.queryid, LEFT(v.query, 32) as query, v.avg_error, v.rms_error,
+          SELECT v.queryid, LEFT(v.query, 32) as query,
+                 v.avg_avg, v.avg_min, v.avg_max, v.avg_cnt, v.avg_dev,
+                 v.rms_avg, v.rms_min, v.rms_max, v.rms_cnt, v.rms_dev,
                  v.twa_avg, v.twa_min, v.twa_max, v.twa_cnt, v.twa_dev,
                  v.wca_avg, v.wca_min, v.wca_max, v.wca_cnt, v.wca_dev,
                  v.exec_time, v.blks_avg, v.blks_min, v.blks_max, v.blks_cnt, v.blks_dev, v.nexecs
           FROM pg_track_optimizer v
           WHERE v.queryid IN (SELECT queryid FROM intersection)
-          ORDER BY v.avg_error DESC;
+          ORDER BY v.avg_avg DESC;
         " > /tmp/benchmark_results.txt
 
         # Save script path and extension commit before changing directories

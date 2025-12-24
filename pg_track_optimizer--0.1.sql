@@ -119,8 +119,8 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT dboid			Oid,
 	OUT queryid			bigint,
 	OUT query           text,
-	OUT avg_error		float8,
-	OUT rms_error		float8,
+	OUT avg_error		rstats,
+	OUT rms_error		rstats,
 	OUT twa_error		rstats,
 	OUT wca_error		rstats,
 	OUT blks_accessed   rstats,
@@ -138,7 +138,17 @@ LANGUAGE C STRICT VOLATILE;
  * separate columns.
  */
 CREATE VIEW pg_track_optimizer AS SELECT
-  t.queryid, t.query, t.avg_error, t.rms_error,
+  t.queryid, t.query,
+
+  /* Average error statistics */
+  t.avg_error -> 'min' AS avg_min, t.avg_error -> 'max' AS avg_max,
+  t.avg_error -> 'count' AS avg_cnt,
+  t.avg_error -> 'mean' AS avg_avg, t.avg_error -> 'stddev' AS avg_dev,
+
+  /* RMS error statistics */
+  t.rms_error -> 'min' AS rms_min, t.rms_error -> 'max' AS rms_max,
+  t.rms_error -> 'count' AS rms_cnt,
+  t.rms_error -> 'mean' AS rms_avg, t.rms_error -> 'stddev' AS rms_dev,
 
   /* Time-weighted average error statistics */
   t.twa_error -> 'min' AS twa_min, t.twa_error -> 'max' AS twa_max,

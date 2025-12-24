@@ -49,7 +49,7 @@ cat > "$WIKI_PAGE" <<EOF
 
 ## Top Queries by Error Metrics
 
-This table shows queries that appear in the top 10 for **all** error metrics (avg_error, rms_error, twa_avg, and wca_avg). These are the queries with consistently poor estimation across all criteria.
+This table shows queries that appear in the top 10 for **all** error metrics (avg_avg, rms_avg, twa_avg, and wca_avg). These are the queries with consistently poor estimation across all criteria.
 
 \`\`\`
 ${BENCHMARK_RESULTS}
@@ -60,8 +60,8 @@ ${BENCHMARK_RESULTS}
 The results above include the following metrics for each query:
 - **queryid**: Internal PostgreSQL query identifier
 - **query**: The SQL query text (normalised, with literals replaced by placeholders; truncated to first 32 characters)
-- **avg_error**: Simple average of log-scale errors across plan nodes
-- **rms_error**: Root Mean Square error (emphasises large estimation errors)
+- **avg_avg, avg_min, avg_max, avg_cnt, avg_dev**: Simple average of log-scale errors across plan nodes (running statistics)
+- **rms_avg, rms_min, rms_max, rms_cnt, rms_dev**: Root Mean Square error statistics (emphasises large estimation errors)
 - **twa_avg, twa_min, twa_max, twa_cnt, twa_dev**: Time-Weighted Average error statistics (highlights errors in slow nodes)
 - **wca_avg, wca_min, wca_max, wca_cnt, wca_dev**: Cost-Weighted Average error statistics (highlights errors in expensive nodes)
 - **exec_time**: Total execution time across all executions (milliseconds)
