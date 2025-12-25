@@ -677,9 +677,23 @@ PG_FUNCTION_INFO_V1(to_flush);
 
 static const uint32 DATA_FILE_HEADER	= 12354678;
 static const uint32 DATA_FORMAT_VERSION = 20251225;
+static const char *DATA_PG_VERSION_STR = PG_VERSION_STR;
 
 #define EXTENSION_NAME "pg_track_optimizer"
-static const char *filename = PG_STAT_TMP_DIR "/" EXTENSION_NAME".stat";
+static const char *filename = PG_STAT_TMP_DIR "/" EXTENSION_NAME ".stat";
+
+/*
+ * IMPLEMENTATION NOTES:
+ * dump/restore statistics is an optional procedure that is executed in
+ * an infrequent and non-concurrent mode. Also, it is not any critical for
+ * production - it should be executed in testing environment, on replica or
+ * in a maintenance window. So, for the sake of laconic and clear code, use
+ * simplistic coding approach with a single fsync if the flush operation has
+ * been done successfully.
+ *
+ * NOTE: query execution statistics inherently platform-dependent. So, skip
+ * reading the data file if PG_VERSION_STR has been changed.
+ */
 
 /*
  * Specifics of the storage procedure of dshash table:
@@ -692,10 +706,11 @@ _flush_hash_table(void)
 {
 	dshash_seq_status			stat;
 	DSMOptimizerTrackerEntry   *entry;
-	const char				   *tmpfile = PG_STAT_TMP_DIR "/" EXTENSION_NAME"%s.tmp";
+	const char				   *tmpfile = PG_STAT_TMP_DIR "/" EXTENSION_NAME".tmp";
 	FILE					   *file;
 	uint32						counter = 0;
 	uint32						nrecs;
+	const uint32				verstr_len = strlen(DATA_PG_VERSION_STR);
 
 	if (!IsUnderPostmaster)
 		return false;
@@ -714,6 +729,8 @@ _flush_hash_table(void)
 	/* Add a header to the file for more reliable identification of the data */
 	if (fwrite(&DATA_FILE_HEADER, sizeof(uint32), 1, file) != 1 ||
 		fwrite(&DATA_FORMAT_VERSION, sizeof(uint32), 1, file) != 1 ||
+		fwrite(&verstr_len, sizeof(uint32), 1, file) != 1 ||
+		fwrite(DATA_PG_VERSION_STR,  verstr_len, 1, file) != 1 ||
 		fwrite(&nrecs, sizeof(uint32), 1, file) != 1)
 		goto error;
 
@@ -766,6 +783,8 @@ error:
 			(errcode_for_file_access(),
 			 errmsg("[%s] could not write file \"%s\": %m",
 			 EXTENSION_NAME, tmpfile)));
+
+	/* Keep compiler quiet */
 	return false;
 }
 
@@ -783,7 +802,9 @@ _load_hash_table(TODSMRegistry *state)
 {
 	FILE					   *file;
 	uint32						header;
-	int32						pgver;
+	int32						fmtver;
+	char					   *ver_str;
+	uint32						verstr_len;
 	DSMOptimizerTrackerEntry	disk_entry;
 	DSMOptimizerTrackerEntry   *entry;
 	uint32						nrecs;
@@ -821,14 +842,24 @@ _load_hash_table(TODSMRegistry *state)
 	}
 
 	if (fread(&header, sizeof(uint32), 1, file) != 1 ||
-		fread(&pgver, sizeof(uint32), 1, file) != 1 ||
+		fread(&fmtver, sizeof(uint32), 1, file) != 1 ||
+		fread(&verstr_len, sizeof(uint32), 1, file) != 1)
+		goto read_error;
+
+	ver_str = palloc0(verstr_len + 1);
+
+	if (fread(ver_str, verstr_len, 1, file) != 1 ||
 		fread(&nrecs, sizeof(uint32), 1, file) != 1)
 		goto read_error;
+
 	if (header != DATA_FILE_HEADER)
 		goto data_header_error;
-	if (pgver != DATA_FORMAT_VERSION)
+	if (fmtver != DATA_FORMAT_VERSION)
 		goto data_version_error;
+	if (strcmp(ver_str, DATA_PG_VERSION_STR) != 0)
+		goto pg_version_error;
 
+	pfree(ver_str);
 	Assert(nrecs >= 0);
 
 	for (i = 0; i < nrecs; i++)
@@ -882,7 +913,7 @@ _load_hash_table(TODSMRegistry *state)
 	}
 
 	/*
-	 * Expect to get EOF/ If not - complain. Use assertion to identify the issue
+	 * Expect to get EOF. If not - complain. Use assertion to identify the issue
 	 * during development cycle.
 	 */
 	if (fread(&disk_entry, 1, 1, file) == 1)
@@ -916,7 +947,14 @@ data_version_error:
 	ereport(ERROR,
 			(errcode(ERRCODE_DATA_CORRUPTED),
 			 errmsg("[%s] file \"%s\" has incompatible data format version %d instead of %d",
-			 EXTENSION_NAME, filename, pgver, DATA_FORMAT_VERSION)));
+			 EXTENSION_NAME, filename, fmtver, DATA_FORMAT_VERSION)));
+pg_version_error:
+	ereport(WARNING,
+			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			 errmsg("[%s] file \"%s\" has been written on different platform",
+			 EXTENSION_NAME, filename),
+			 errdetail("skip data file load for safety"),
+			 errhint("remove the file manually or reset statistics in advance")));
 fail:
 	if (file)
 		FreeFile(file);
