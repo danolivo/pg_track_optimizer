@@ -28,6 +28,7 @@
 #include "miscadmin.h"
 #include "nodes/queryjumble.h"
 #include "pgstat.h"
+#include "port/pg_crc32c.h"
 #include "storage/dsm_registry.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -681,7 +682,7 @@ to_reset(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(to_flush);
 
 static const uint32 DATA_FILE_HEADER	= 12354678;
-static const uint32 DATA_FORMAT_VERSION = 20251225;
+static const uint32 DATA_FORMAT_VERSION = 20251226; /* Added CRC32C checksum */
 static const char *DATA_PG_VERSION_STR = PG_VERSION_STR;
 
 #define EXTENSION_NAME "pg_track_optimizer"
@@ -718,6 +719,7 @@ _flush_hash_table(void)
 	uint32						nrecs;
 	const uint32				verstr_len = strlen(DATA_PG_VERSION_STR);
 	off_t						filepos = 0;
+	pg_crc32c					crc;
 
 	if (!IsUnderPostmaster)
 		return false;
@@ -736,35 +738,43 @@ _flush_hash_table(void)
 	 */
 	nrecs = pg_atomic_read_u32(&shared->htab_counter);
 
+	/* Initialize CRC32C checksum computation */
+	INIT_CRC32C(crc);
+
 	/* Add a header to the file for more reliable identification of the data */
 	written = FileWrite(file, &DATA_FILE_HEADER, sizeof(uint32), filepos,
 						WAIT_EVENT_DATA_FILE_WRITE);
 	if (written != sizeof(uint32))
 		goto error;
+	COMP_CRC32C(crc, &DATA_FILE_HEADER, sizeof(uint32));
 	filepos += written;
 
 	written = FileWrite(file, &DATA_FORMAT_VERSION, sizeof(uint32), filepos,
 						WAIT_EVENT_DATA_FILE_WRITE);
 	if (written != sizeof(uint32))
 		goto error;
+	COMP_CRC32C(crc, &DATA_FORMAT_VERSION, sizeof(uint32));
 	filepos += written;
 
 	written = FileWrite(file, &verstr_len, sizeof(uint32), filepos,
 						WAIT_EVENT_DATA_FILE_WRITE);
 	if (written != sizeof(uint32))
 		goto error;
+	COMP_CRC32C(crc, &verstr_len, sizeof(uint32));
 	filepos += written;
 
 	written = FileWrite(file, DATA_PG_VERSION_STR, verstr_len, filepos,
 						WAIT_EVENT_DATA_FILE_WRITE);
 	if (written != verstr_len)
 		goto error;
+	COMP_CRC32C(crc, DATA_PG_VERSION_STR, verstr_len);
 	filepos += written;
 
 	written = FileWrite(file, &nrecs, sizeof(uint32), filepos,
 						WAIT_EVENT_DATA_FILE_WRITE);
 	if (written != sizeof(uint32))
 		goto error;
+	COMP_CRC32C(crc, &nrecs, sizeof(uint32));
 	filepos += written;
 
 	dshash_seq_init(&stat, htab, true);
@@ -789,18 +799,21 @@ _flush_hash_table(void)
 							filepos, WAIT_EVENT_DATA_FILE_WRITE);
 		if (written != sizeof(DSMOptimizerTrackerEntry))
 			goto error;
+		COMP_CRC32C(crc, entry, sizeof(DSMOptimizerTrackerEntry));
 		filepos += written;
 
 		written = FileWrite(file, &len, sizeof(uint32), filepos,
 							WAIT_EVENT_DATA_FILE_WRITE);
 		if (written != sizeof(uint32))
 			goto error;
+		COMP_CRC32C(crc, &len, sizeof(uint32));
 		filepos += written;
 
 		written = FileWrite(file, str, len, filepos,
 							WAIT_EVENT_DATA_FILE_WRITE);
 		if (written != len)
 			goto error;
+		COMP_CRC32C(crc, str, len);
 		filepos += written;
 
 		counter++;
@@ -808,6 +821,14 @@ _flush_hash_table(void)
 	dshash_seq_term(&stat);
 
 	Assert(counter == nrecs);
+
+	/* Finalize CRC32C computation and write it to the file */
+	FIN_CRC32C(crc);
+	written = FileWrite(file, &crc, sizeof(pg_crc32c), filepos,
+						WAIT_EVENT_DATA_FILE_WRITE);
+	if (written != sizeof(pg_crc32c))
+		goto error;
+	filepos += written;
 
 	/*
 	 * Sync the file to disk before making it visible via rename.
@@ -860,6 +881,8 @@ _load_hash_table(TODSMRegistry *state)
 	uint32						nrecs;
 	uint32						i;
 	off_t						filepos = 0;
+	pg_crc32c					crc;
+	pg_crc32c					stored_crc;
 
 	if (shared != NULL)
 	{
@@ -892,12 +915,16 @@ _load_hash_table(TODSMRegistry *state)
 		return false;
 	}
 
+	/* Initialize CRC32C checksum computation */
+	INIT_CRC32C(crc);
+
 	nbytes = FileRead(file, &header, sizeof(uint32), filepos,
 					  WAIT_EVENT_DATA_FILE_READ);
 	if (nbytes != sizeof(uint32))
 		goto read_error;
 	if (header != DATA_FILE_HEADER)
 		goto data_header_error;
+	COMP_CRC32C(crc, &header, sizeof(uint32));
 	filepos += sizeof(uint32);
 
 	nbytes = FileRead(file, &fmtver, sizeof(uint32), filepos,
@@ -906,12 +933,14 @@ _load_hash_table(TODSMRegistry *state)
 		goto read_error;
 	if (fmtver != DATA_FORMAT_VERSION)
 		goto data_version_error;
+	COMP_CRC32C(crc, &fmtver, sizeof(uint32));
 	filepos += nbytes;
 
 	nbytes = FileRead(file, &verstr_len, sizeof(uint32), filepos,
 					  WAIT_EVENT_DATA_FILE_READ);
 	if (nbytes != sizeof(uint32))
 		goto read_error;
+	COMP_CRC32C(crc, &verstr_len, sizeof(uint32));
 	filepos += nbytes;
 
 	ver_str = palloc0(verstr_len + 1);
@@ -921,7 +950,16 @@ _load_hash_table(TODSMRegistry *state)
 	if (nbytes != verstr_len)
 		goto read_error;
 	if (strcmp(ver_str, DATA_PG_VERSION_STR) != 0)
-		goto pg_version_error;
+	{
+		ereport(WARNING,
+			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			 errmsg("[%s] file \"%s\" has been written on different platform",
+			 EXTENSION_NAME, filename),
+			 errdetail("skip data file load for safety"),
+			 errhint("remove the file manually or reset statistics in advance")));
+		goto end;
+	}
+	COMP_CRC32C(crc, ver_str, verstr_len);
 	pfree(ver_str);
 	filepos += nbytes;
 
@@ -939,6 +977,7 @@ _load_hash_table(TODSMRegistry *state)
 			 errdetail("skip data file load for safety"),
 			 errhint("remove the file manually or reset statistics in advance")));
 	}
+	COMP_CRC32C(crc, &nrecs, sizeof(uint32));
 	filepos += nbytes;
 
 	for (i = 0; i < nrecs; i++)
@@ -952,6 +991,7 @@ _load_hash_table(TODSMRegistry *state)
 						  filepos, WAIT_EVENT_DATA_FILE_READ);
 		if (nbytes != sizeof(DSMOptimizerTrackerEntry))
 			goto read_error;
+		COMP_CRC32C(crc, &disk_entry, sizeof(DSMOptimizerTrackerEntry));
 		filepos += nbytes;
 
 		/* The case of next entry */
@@ -964,6 +1004,7 @@ _load_hash_table(TODSMRegistry *state)
 						  WAIT_EVENT_DATA_FILE_READ);
 		if (nbytes != sizeof(uint32))
 			goto read_error;
+		COMP_CRC32C(crc, &len, sizeof(uint32));
 		filepos += nbytes;
 
 		disk_entry.query_ptr = dsa_allocate0(htab_dsa, len + 1);
@@ -972,6 +1013,7 @@ _load_hash_table(TODSMRegistry *state)
 		nbytes = FileRead(file, str, len, filepos, WAIT_EVENT_DATA_FILE_READ);
 		if (nbytes != len)
 			goto read_error;
+		COMP_CRC32C(crc, str, len);
 		filepos += nbytes;
 
 		entry = dshash_find_or_insert(htab, &disk_entry.key, &found);
@@ -1001,8 +1043,31 @@ _load_hash_table(TODSMRegistry *state)
 	}
 
 	/*
-	 * Expect to get EOF. If not - complain. Use assertion to identify the issue
-	 * during development cycle.
+	 * Finalize CRC computation and verify against stored checksum.
+	 * This detects any corruption from disk errors, partial writes, or bit flips.
+	 */
+	FIN_CRC32C(crc);
+
+	nbytes = FileRead(file, &stored_crc, sizeof(pg_crc32c), filepos,
+					  WAIT_EVENT_DATA_FILE_READ);
+	if (nbytes != sizeof(pg_crc32c))
+		goto crc_read_error;
+	filepos += nbytes;
+
+	if (!EQ_CRC32C(crc, stored_crc))
+	{
+		ereport(WARNING,
+			(errcode(ERRCODE_DATA_CORRUPTED),
+			 errmsg("[%s] file \"%s\" has incorrect CRC32C checksum",
+			 EXTENSION_NAME, filename),
+			 errdetail("Expected %08X, found %08X", crc, stored_crc),
+			 errhint("File is corrupted - skipping load for safety")));
+		goto end;
+	}
+
+	/*
+	 * Verify we're at EOF - no extra data after the checksum.
+	 * Use assertion to identify the issue during development cycle.
 	 */
 	nbytes = FileRead(file, &disk_entry, 1, filepos, WAIT_EVENT_DATA_FILE_READ);
 	if (nbytes == 1)
@@ -1035,14 +1100,14 @@ data_version_error:
 			(errcode(ERRCODE_DATA_CORRUPTED),
 			 errmsg("[%s] file \"%s\" has incompatible data format version %d instead of %d",
 			 EXTENSION_NAME, filename, fmtver, DATA_FORMAT_VERSION)));
-pg_version_error:
-	ereport(WARNING,
-			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			 errmsg("[%s] file \"%s\" has been written on different platform",
+crc_read_error:
+	ereport(ERROR,
+			(errcode(ERRCODE_DATA_CORRUPTED),
+			 errmsg("[%s] file \"%s\" is missing CRC32C checksum",
 			 EXTENSION_NAME, filename),
-			 errdetail("skip data file load for safety"),
-			 errhint("remove the file manually or reset statistics in advance")));
-
+			 errdetail("File may be truncated or corrupted"),
+			 errhint("Remove the file manually or reset statistics in advance")));
+end:
 	if (file >= 0)
 		FileClose(file);
 
