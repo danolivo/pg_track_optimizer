@@ -29,6 +29,7 @@
 #include "nodes/queryjumble.h"
 #include "pgstat.h"
 #include "storage/dsm_registry.h"
+#include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
 #include "utils/builtins.h"
@@ -333,6 +334,12 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 			 errhidestmt(true)));
 }
 
+static uint32
+hashtable_elements_max()
+{
+	return (uint32) (hash_mem * (Size) 1024 / sizeof(DSMOptimizerTrackerEntry));
+}
+
 /*
  * Write (UBSERT/UPDATE) an entry into the HTAB.
  *
@@ -353,9 +360,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 	/* Guard on the number of elements */
 	counter = pg_atomic_read_u32(&shared->htab_counter);
-	if (counter == UINT32_MAX ||
-		counter > (uint32) (hash_mem *
-								(Size) 1024 / sizeof(DSMOptimizerTrackerEntry)))
+	if (counter == UINT32_MAX || counter > hashtable_elements_max())
 	{
 		/* TODO: set status of full hash table */
 		return false;
@@ -707,17 +712,22 @@ _flush_hash_table(void)
 	dshash_seq_status			stat;
 	DSMOptimizerTrackerEntry   *entry;
 	const char				   *tmpfile = PG_STAT_TMP_DIR "/" EXTENSION_NAME".tmp";
-	FILE					   *file;
+	File						file = -1;
+	ssize_t						written;
 	uint32						counter = 0;
 	uint32						nrecs;
 	const uint32				verstr_len = strlen(DATA_PG_VERSION_STR);
+	off_t						filepos = 0;
 
 	if (!IsUnderPostmaster)
 		return false;
 
-	file = AllocateFile(tmpfile, PG_BINARY_W);
-	if (file == NULL)
-		goto error;
+	file = PathNameOpenFile(tmpfile, O_CREAT | O_WRONLY | O_TRUNC | PG_BINARY);
+	if (file < 0)
+		ereport(ERROR,
+			(errcode_for_file_access(),
+			 errmsg("[%s] could not open file \"%s\": %m for writing",
+			 EXTENSION_NAME, tmpfile)));
 
 	/*
 	 * htab_counter now is quite reliable entity. So, use it dumping the HTAB.
@@ -727,12 +737,35 @@ _flush_hash_table(void)
 	nrecs = pg_atomic_read_u32(&shared->htab_counter);
 
 	/* Add a header to the file for more reliable identification of the data */
-	if (fwrite(&DATA_FILE_HEADER, sizeof(uint32), 1, file) != 1 ||
-		fwrite(&DATA_FORMAT_VERSION, sizeof(uint32), 1, file) != 1 ||
-		fwrite(&verstr_len, sizeof(uint32), 1, file) != 1 ||
-		fwrite(DATA_PG_VERSION_STR,  verstr_len, 1, file) != 1 ||
-		fwrite(&nrecs, sizeof(uint32), 1, file) != 1)
+	written = FileWrite(file, &DATA_FILE_HEADER, sizeof(uint32), filepos,
+						WAIT_EVENT_DATA_FILE_WRITE);
+	if (written != sizeof(uint32))
 		goto error;
+	filepos += written;
+
+	written = FileWrite(file, &DATA_FORMAT_VERSION, sizeof(uint32), filepos,
+						WAIT_EVENT_DATA_FILE_WRITE);
+	if (written != sizeof(uint32))
+		goto error;
+	filepos += written;
+
+	written = FileWrite(file, &verstr_len, sizeof(uint32), filepos,
+						WAIT_EVENT_DATA_FILE_WRITE);
+	if (written != sizeof(uint32))
+		goto error;
+	filepos += written;
+
+	written = FileWrite(file, DATA_PG_VERSION_STR, verstr_len, filepos,
+						WAIT_EVENT_DATA_FILE_WRITE);
+	if (written != verstr_len)
+		goto error;
+	filepos += written;
+
+	written = FileWrite(file, &nrecs, sizeof(uint32), filepos,
+						WAIT_EVENT_DATA_FILE_WRITE);
+	if (written != sizeof(uint32))
+		goto error;
+	filepos += written;
 
 	dshash_seq_init(&stat, htab, true);
 	while ((entry = dshash_seq_next(&stat)) != NULL)
@@ -752,10 +785,23 @@ _flush_hash_table(void)
 		 * We declare this extension has no support of dump/restore on different
 		 * hardware/OS platforms. So, it is safe.
 		 */
-		if (fwrite(entry, sizeof(DSMOptimizerTrackerEntry), 1, file) != 1 ||
-			fwrite(&len, sizeof(uint32), 1, file) != 1 ||
-			fwrite(str, len, 1, file) != 1)
+		written = FileWrite(file, entry, sizeof(DSMOptimizerTrackerEntry),
+							filepos, WAIT_EVENT_DATA_FILE_WRITE);
+		if (written != sizeof(DSMOptimizerTrackerEntry))
 			goto error;
+		filepos += written;
+
+		written = FileWrite(file, &len, sizeof(uint32), filepos,
+							WAIT_EVENT_DATA_FILE_WRITE);
+		if (written != sizeof(uint32))
+			goto error;
+		filepos += written;
+
+		written = FileWrite(file, str, len, filepos,
+							WAIT_EVENT_DATA_FILE_WRITE);
+		if (written != len)
+			goto error;
+		filepos += written;
 
 		counter++;
 	}
@@ -763,20 +809,23 @@ _flush_hash_table(void)
 
 	Assert(counter == nrecs);
 
-	if (FreeFile(file))
-	{
-		file = NULL;
+	/*
+	 * Sync the file to disk before making it visible via rename.
+	 * This ensures crash safety - data must be durable before directory update.
+	 */
+	if (FileSync(file, WAIT_EVENT_DATA_FILE_SYNC) != 0)
 		goto error;
-	}
 
 	(void) durable_rename(tmpfile, filename, LOG);
 	elog(LOG, "[%s] %u records stored in file \"%s\"",
 		 EXTENSION_NAME, counter, filename);
 	return true;
 
+	/*
+	 * Before throwing an error we should remove (potentially) inconsistent
+	 * temporary file.
+	 */
 error:
-	if (file)
-		FreeFile(file);
 	unlink(tmpfile);
 
 	ereport(ERROR,
@@ -800,7 +849,8 @@ error:
 static bool
 _load_hash_table(TODSMRegistry *state)
 {
-	FILE					   *file;
+	File						file;
+	ssize_t						nbytes;
 	uint32						header;
 	int32						fmtver;
 	char					   *ver_str;
@@ -809,6 +859,7 @@ _load_hash_table(TODSMRegistry *state)
 	DSMOptimizerTrackerEntry   *entry;
 	uint32						nrecs;
 	uint32						i;
+	off_t						filepos = 0;
 
 	if (shared != NULL)
 	{
@@ -832,8 +883,8 @@ _load_hash_table(TODSMRegistry *state)
 				 errhint("Reset hash table in advance")));
 	}
 
-	file = AllocateFile(filename, PG_BINARY_R);
-	if (file == NULL)
+	file = PathNameOpenFile(filename, O_RDONLY | PG_BINARY);
+	if (file < 0)
 	{
 		if (errno != ENOENT)
 			goto read_error;
@@ -841,26 +892,54 @@ _load_hash_table(TODSMRegistry *state)
 		return false;
 	}
 
-	if (fread(&header, sizeof(uint32), 1, file) != 1 ||
-		fread(&fmtver, sizeof(uint32), 1, file) != 1 ||
-		fread(&verstr_len, sizeof(uint32), 1, file) != 1)
+	nbytes = FileRead(file, &header, sizeof(uint32), filepos,
+					  WAIT_EVENT_DATA_FILE_READ);
+	if (nbytes != sizeof(uint32))
 		goto read_error;
+	if (header != DATA_FILE_HEADER)
+		goto data_header_error;
+	filepos += sizeof(uint32);
+
+	nbytes = FileRead(file, &fmtver, sizeof(uint32), filepos,
+					  WAIT_EVENT_DATA_FILE_READ);
+	if (nbytes != sizeof(uint32))
+		goto read_error;
+	if (fmtver != DATA_FORMAT_VERSION)
+		goto data_version_error;
+	filepos += nbytes;
+
+	nbytes = FileRead(file, &verstr_len, sizeof(uint32), filepos,
+					  WAIT_EVENT_DATA_FILE_READ);
+	if (nbytes != sizeof(uint32))
+		goto read_error;
+	filepos += nbytes;
 
 	ver_str = palloc0(verstr_len + 1);
 
-	if (fread(ver_str, verstr_len, 1, file) != 1 ||
-		fread(&nrecs, sizeof(uint32), 1, file) != 1)
+	nbytes = FileRead(file, ver_str, verstr_len, filepos,
+					  WAIT_EVENT_DATA_FILE_READ);
+	if (nbytes != verstr_len)
 		goto read_error;
-
-	if (header != DATA_FILE_HEADER)
-		goto data_header_error;
-	if (fmtver != DATA_FORMAT_VERSION)
-		goto data_version_error;
 	if (strcmp(ver_str, DATA_PG_VERSION_STR) != 0)
 		goto pg_version_error;
-
 	pfree(ver_str);
+	filepos += nbytes;
+
+	nbytes = FileRead(file, &nrecs, sizeof(uint32), filepos,
+					  WAIT_EVENT_DATA_FILE_READ);
+	if (nbytes != sizeof(uint32))
+		goto read_error;
 	Assert(nrecs >= 0);
+	if (nrecs > hashtable_elements_max())
+	{
+		ereport(ERROR,
+			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			 errmsg("[%s] file \"%s\" contains more records (%d) than hash table may consume (%d)",
+			 EXTENSION_NAME, filename, nrecs, hashtable_elements_max()),
+			 errdetail("skip data file load for safety"),
+			 errhint("remove the file manually or reset statistics in advance")));
+	}
+	filepos += nbytes;
 
 	for (i = 0; i < nrecs; i++)
 	{
@@ -869,8 +948,11 @@ _load_hash_table(TODSMRegistry *state)
 		bool	found;
 
 		/* First step - read the record */
-		if (fread(&disk_entry, sizeof(DSMOptimizerTrackerEntry), 1, file) != 1)
+		nbytes = FileRead(file, &disk_entry, sizeof(DSMOptimizerTrackerEntry),
+						  filepos, WAIT_EVENT_DATA_FILE_READ);
+		if (nbytes != sizeof(DSMOptimizerTrackerEntry))
 			goto read_error;
+		filepos += nbytes;
 
 		/* The case of next entry */
 
@@ -878,13 +960,19 @@ _load_hash_table(TODSMRegistry *state)
 			   OidIsValid(disk_entry.key.dbOid));
 
 		/* Load query string */
-		if (fread(&len, sizeof(uint32), 1, file) != 1)
+		nbytes = FileRead(file, &len, sizeof(uint32), filepos,
+						  WAIT_EVENT_DATA_FILE_READ);
+		if (nbytes != sizeof(uint32))
 			goto read_error;
+		filepos += nbytes;
+
 		disk_entry.query_ptr = dsa_allocate0(htab_dsa, len + 1);
 		Assert(DsaPointerIsValid(disk_entry.query_ptr));
 		str = (char *) dsa_get_address(htab_dsa, disk_entry.query_ptr);
-		if (fread(str, len, 1, file) != 1)
+		nbytes = FileRead(file, str, len, filepos, WAIT_EVENT_DATA_FILE_READ);
+		if (nbytes != len)
 			goto read_error;
+		filepos += nbytes;
 
 		entry = dshash_find_or_insert(htab, &disk_entry.key, &found);
 		if (found)
@@ -916,7 +1004,8 @@ _load_hash_table(TODSMRegistry *state)
 	 * Expect to get EOF. If not - complain. Use assertion to identify the issue
 	 * during development cycle.
 	 */
-	if (fread(&disk_entry, 1, 1, file) == 1)
+	nbytes = FileRead(file, &disk_entry, 1, filepos, WAIT_EVENT_DATA_FILE_READ);
+	if (nbytes == 1)
 	{
 		Assert(0);
 		ereport(WARNING,
@@ -925,7 +1014,7 @@ _load_hash_table(TODSMRegistry *state)
 				 EXTENSION_NAME, filename)));
 	}
 
-	FreeFile(file);
+	FileClose(file);
 	pg_atomic_write_u32(&state->htab_counter, nrecs);
 	elog(LOG, "[%s] %u records loaded from file \"%s\"",
 		 EXTENSION_NAME, nrecs, filename);
@@ -936,13 +1025,11 @@ read_error:
 			(errcode_for_file_access(),
 			 errmsg("[%s] could not read file \"%s\": %m",
 			 EXTENSION_NAME, filename)));
-	goto fail;
 data_header_error:
 	ereport(ERROR,
 			(errcode(ERRCODE_DATA_CORRUPTED),
 			 errmsg("[%s] file \"%s\" has incompatible header version %d instead of %d",
 			 EXTENSION_NAME, filename, header, DATA_FILE_HEADER)));
-	goto fail;
 data_version_error:
 	ereport(ERROR,
 			(errcode(ERRCODE_DATA_CORRUPTED),
@@ -955,9 +1042,9 @@ pg_version_error:
 			 EXTENSION_NAME, filename),
 			 errdetail("skip data file load for safety"),
 			 errhint("remove the file manually or reset statistics in advance")));
-fail:
-	if (file)
-		FreeFile(file);
+
+	if (file >= 0)
+		FileClose(file);
 
 	return false;
 }
