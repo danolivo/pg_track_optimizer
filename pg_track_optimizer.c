@@ -74,7 +74,7 @@ typedef struct DSMOptimizerTrackerKey
 } DSMOptimizerTrackerKey;
 
 /*
- * Entry in the optimizer tracking hash table.
+ * Entry in the optimiser tracking hash table.
  *
  * Contains both per-execution snapshots (overwritten each time) and
  * cumulative statistics (accumulated across all executions).
@@ -316,6 +316,8 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 	 * debug_query_string to identify just which statement is being
 	 * reported.  This isn't ideal but trying to do it here would
 	 * often result in duplication.
+	 * NOTE: Don't afraid special symbols inside a query: errmsg works out this
+	 * issue (see, autoexplain do the same).
 	 */
 	ereport(LOG,
 			(errmsg("duration: %.3f ms, relative error: %.4lf, plan:\n%s",
@@ -508,7 +510,7 @@ _PG_init(void)
 							 "Zero prints all plans; -1 turns this feature off",
 							 &log_min_error,
 							 -1.0,
-							 -1.0, INT_MAX, /* Looks like such a huge error, as INT_MAX doesn't make sense */
+							 -1.0, INT_MAX, /* Looks like such a huge error, as INT_MAX, doesn't make sense */
 							 PGC_SUSET,
 							 0,
 							 NULL,
@@ -682,7 +684,7 @@ _flush_hash_table(void)
 {
 	dshash_seq_status			stat;
 	DSMOptimizerTrackerEntry   *entry;
-	char					   *tmpfile = psprintf("%s.tmp", EXTENSION_NAME);
+	const char				   *tmpfile = EXTENSION_NAME"%s.tmp";
 	FILE					   *file;
 	uint32						counter = 0;
 	uint32						nrecs;
@@ -722,8 +724,8 @@ _flush_hash_table(void)
 
 		/*
 		 * Write data into the file. It is more or less stable procedure:
-		 * I don't think someone will try to save the data on one platform and
-		 * restore it on very different another one.
+		 * We declare this extension has no support of dump/restore on different
+		 * hardware/OS platforms. So, it is safe.
 		 */
 		if (fwrite(entry, sizeof(DSMOptimizerTrackerEntry), 1, file) != 1 ||
 			fwrite(&len, sizeof(uint32), 1, file) != 1 ||
@@ -743,21 +745,19 @@ _flush_hash_table(void)
 	}
 
 	(void) durable_rename(tmpfile, filename, LOG);
-	pfree(tmpfile);
 	elog(LOG, "[%s] %u records stored in file \"%s\"",
 		 EXTENSION_NAME, counter, filename);
 	return true;
 
 error:
+	if (file)
+		FreeFile(file);
+	unlink(tmpfile);
+
 	ereport(ERROR,
 			(errcode_for_file_access(),
 			 errmsg("[%s] could not write file \"%s\": %m",
 			 EXTENSION_NAME, tmpfile)));
-
-	if (file)
-		FreeFile(file);
-	unlink(tmpfile);
-	pfree(tmpfile);
 	return false;
 }
 

@@ -58,7 +58,7 @@ prediction_walker(PlanState *pstate, void *context)
 	 * through the node. This simplistic code becomes a bit tricky in the case
 	 * of parallel workers.
 	 *
-	 * Clarification: we take into account tuples that the nodes has filtered.
+	 * Clarification: we take into account tuples that nodes has filtered.
 	 * Although EXPLAINed nrows shows number of tuples 'produced', we follow
 	 * this logic  because any tuple that came to the node needs some efforts
 	 * and resources to be processed. So, according to the idea of detection
@@ -136,6 +136,7 @@ prediction_walker(PlanState *pstate, void *context)
 				wntuples += instr->nfiltered1 + instr->nfiltered2 +
 																instr->ntuples2;
 
+			/* NOTE: nloops == 0 are filtered before */
 			wntuples += instr->ntuples;
 			wnloops += instr->nloops;
 			real_rows += instr->ntuples / instr->nloops;
@@ -179,6 +180,7 @@ prediction_walker(PlanState *pstate, void *context)
 	 */
 	Assert(pstate->instrument->total > 0.0);
 
+	/* Don't afraid overflow here because plan_rows forced to be >= 1 */
 	node_error = fabs(log(real_rows / plan_rows));
 	ctx->avg_error += node_error;
 	ctx->rms_error += node_error * node_error;

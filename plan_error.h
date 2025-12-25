@@ -34,7 +34,7 @@ typedef struct PlanEstimatorContext
 	int		nnodes;
 
 	/*
-	 * Total number of nodes in the plan. Originally, used to detect leaf nodes.
+	 * Total number of nodes in the plan. Originally used to detect leaf nodes.
 	 * Now, it is a part of statistics.
 	 */
 	int 	counter;
