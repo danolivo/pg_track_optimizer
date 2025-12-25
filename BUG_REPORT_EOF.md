@@ -79,7 +79,23 @@ while (counter < nrecs)
 
 ## How to Reproduce
 
-Run the regression test `sql/flush_load.sql`:
+### TAP Test (Recommended)
+
+Run the TAP test that actually restarts the server:
+
+```bash
+make USE_PGXS=1 prove_check PROVE_TESTS='t/001_flush_load.pl'
+```
+
+This test:
+1. Creates tracking data
+2. Flushes to disk
+3. **Restarts the PostgreSQL server** (triggers `_load_hash_table()`)
+4. Verifies data was loaded correctly
+
+### SQL Regression Test (Limited)
+
+Note: The SQL test `sql/flush_load.sql` doesn't actually restart the server, so it only partially tests the scenario:
 
 ```bash
 make USE_PGXS=1 installcheck TESTS=flush_load
@@ -88,12 +104,25 @@ make USE_PGXS=1 installcheck TESTS=flush_load
 ### Expected Behavior (after fix)
 - 3 queries tracked before flush
 - File written successfully
-- Extension dropped and recreated
-- 3 queries loaded from file
-- Test passes
+- Server restarted
+- 3 queries loaded from file successfully
+- TAP test passes with all assertions OK
 
 ### Actual Behavior (with bug)
-In debug builds:
+
+TAP test output:
+```
+ok 1 - Should have 3 tracked queries before flush
+ok 2 - Should have 3 total executions before flush
+ok 3 - Flush file should exist after flush
+ok 4 - Flush file should not be empty
+not ok 5 - Should have 3 queries loaded after restart
+#   Failed test 'Should have 3 queries loaded after restart'
+#          got: '0'
+#     expected: '3'
+```
+
+PostgreSQL log shows:
 ```
 ERROR:  [pg_track_optimizer] could not read file "pg_track_optimizer.stat": Success
 ```
@@ -101,6 +130,7 @@ ERROR:  [pg_track_optimizer] could not read file "pg_track_optimizer.stat": Succ
 In production builds:
 - Same error, but harder to debug
 - File appears corrupt even though it's valid
+- No assertions to catch the problem
 
 ## Proof of Bug
 
@@ -156,13 +186,24 @@ This bug is related to Issue #16 in the security audit: **DATA_FORMAT_VERSION no
 4. Add regression test `flush_load.sql` to CI/CD pipeline
 5. Document in release notes that old persisted files must be flushed before upgrade
 
-## Test Case
+## Test Cases
 
-The test case `sql/flush_load.sql` demonstrates:
-1. Creating tracked queries
-2. Flushing to disk
-3. Dropping extension (clears memory)
-4. Recreating extension (triggers load from disk)
-5. Verifying data was loaded correctly
+### TAP Test: `t/001_flush_load.pl`
+The primary test that fully reproduces the bug:
+1. Creates tracked queries
+2. Flushes to disk
+3. **Restarts PostgreSQL server** (triggers `_load_hash_table()`)
+4. Verifies data was loaded correctly
+5. Tests repeatability with second flush/restart cycle
+6. Checks server logs for errors
 
-This is the minimal reproducible test case for this bug.
+This is the definitive test case that proves the bug exists.
+
+### SQL Test: `sql/flush_load.sql`
+A limited test that demonstrates the flush operation but doesn't restart the server:
+1. Creates tracked queries
+2. Flushes to disk
+3. Drops and recreates extension (not the same as server restart)
+4. Verifies data persistence
+
+Note: This SQL test is useful for basic flush testing but doesn't fully trigger the load path.
