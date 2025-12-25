@@ -1,0 +1,61 @@
+--- a/pg_track_optimizer.c
++++ b/pg_track_optimizer.c
+@@ -647,7 +647,7 @@ PG_FUNCTION_INFO_V1(to_flush);
+
+ static const uint32 DATA_FILE_HEADER	= 12354678;
+-static const uint32 DATA_FORMAT_VERSION = 1;
++static const uint32 DATA_FORMAT_VERSION = 2;
+
+ #define EXTENSION_NAME "pg_track_optimizer"
+ static const char *filename = EXTENSION_NAME".stat";
+@@ -783,28 +783,30 @@ _load_hash_table(TODSMRegistry *state)
+
+ 	Assert(nrecs >= 0);
+
+-	while (!feof(file))
++	/*
++	 * Read exactly nrecs records from the file.
++	 * Using feof() is incorrect because it only returns true AFTER a read has
++	 * failed, which would cause us to attempt reading past EOF and fail.
++	 */
++	for (uint32 rec_num = 0; rec_num < nrecs; rec_num++)
+ 	{
+ 		char   *str;
+ 		uint32	len;
+ 		bool	found;
+
+-		/* First step - read the record */
++		/* Read the record structure */
+ 		if (fread(&disk_entry, sizeof(DSMOptimizerTrackerEntry), 1, file) != 1)
+ 			goto read_error;
+
+-		/* The case of next entry */
+-
+ 		Assert(disk_entry.key.queryId != UINT64CONST(0) &&
+ 			   OidIsValid(disk_entry.key.dbOid));
+
+-		/* Load query string */
++		/* Read the query string length and data */
+ 		if (fread(&len, sizeof(uint32), 1, file) != 1)
+ 			goto read_error;
++
+ 		disk_entry.query_ptr = dsa_allocate0(htab_dsa, len + 1);
+ 		Assert(DsaPointerIsValid(disk_entry.query_ptr));
+ 		str = (char *) dsa_get_address(htab_dsa, disk_entry.query_ptr);
++
+ 		if (fread(str, len, 1, file) != 1)
+ 			goto read_error;
+
+@@ -834,6 +836,13 @@ _load_hash_table(TODSMRegistry *state)
+ 		counter++;
+ 	}
+
++	/*
++	 * Verify we read exactly the expected number of records.
++	 * In debug builds this catches file corruption or logic errors.
++	 * In production, the counter is already equal to nrecs by construction,
++	 * but we keep the assertion for development/testing.
++	 */
+ 	Assert(counter == nrecs);
+
+ 	FreeFile(file);
