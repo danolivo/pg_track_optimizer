@@ -38,15 +38,6 @@
 
 PG_MODULE_MAGIC;
 
-#define track_optimizer_enabled(eflags) \
-	( \
-	IsQueryIdEnabled() && !IsParallelWorker() && \
-	queryDesc->plannedstmt->utilityStmt == NULL && \
-	(log_min_error >= 0. || track_mode == TRACK_MODE_FORCED) && \
-	track_mode != TRACK_MODE_DISABLED && \
-	((eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0) \
-	)
-
 #define DATATBL_NCOLS	(13)
 
 typedef struct TODSMRegistry
@@ -57,11 +48,15 @@ typedef struct TODSMRegistry
 	dshash_table_handle	dshh;
 
 	/*
-	 * Atomic counter tracking the number of entries in the hash table.
-	 * Used to enforce memory limits without scanning the entire table.
-	 * Incremented on insert, decremented on delete.
-	 * TODO: if this counter is consistent with the real number of HTAB's
-	 * records we may use it in IO disk operations instead of archaic EOFEntry.
+	 * An atomic counter keeps track of the number of entries in the hash table.
+	 * Usage:
+	 * - Cheap access to the number of elements of the shared HTAB.
+	 * - Use the HTAB dump code to write the number of entries to the file.
+	 * Design choice explanation: should be accessible on read without acquiring
+	 * the HTAB lock (scalability in read). Must be written only under the lock.
+	 * Exception behaviour: in case of an inconsistency detected (it should be
+	 * checked each time we scan the whole HTAB), it must be a FATAL error that
+	 * should cause the HTAB to be reset, along with a descriptive error.
 	 */
 	pg_atomic_uint32	htab_counter;
 } TODSMRegistry;
@@ -158,6 +153,19 @@ void _PG_init(void);
 static bool _load_hash_table(TODSMRegistry *state);
 static bool _flush_hash_table(void);
 
+static inline bool
+track_optimizer_enabled(QueryDesc *queryDesc, int eflags)
+{
+	if (IsQueryIdEnabled() && !IsParallelWorker() &&
+		queryDesc->plannedstmt->utilityStmt == NULL &&
+		(log_min_error >= 0. || track_mode == TRACK_MODE_FORCED) &&
+		track_mode != TRACK_MODE_DISABLED &&
+		((eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0))
+		return true;
+
+	return false;
+}
+
 /*
  * First-time initialization code. Secured by the lock on DSM registry.
  */
@@ -241,7 +249,7 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
 	track_attach_shmem();
 
-	if (track_optimizer_enabled(eflags))
+	if (track_optimizer_enabled(queryDesc, eflags))
 		queryDesc->instrument_options |= INSTRUMENT_TIMER | INSTRUMENT_ROWS;
 
 	if (prev_ExecutorStart)
@@ -249,7 +257,7 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	else
 		standard_ExecutorStart(queryDesc, eflags);
 
-	if (!track_optimizer_enabled(eflags))
+	if (!track_optimizer_enabled(queryDesc, eflags))
 		return;
 
 	/*
@@ -316,6 +324,8 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 }
 
 /*
+ * Write (UBSERT/UPDATE) an entry into the HTAB.
+ *
  * Returns false if memory limit was exceeded.
  */
 static bool
@@ -331,10 +341,11 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	if (!(ctx->avg_error >= log_min_error || track_mode == TRACK_MODE_FORCED))
 		return false;
 
+	/* Guard on the number of elements */
 	counter = pg_atomic_read_u32(&shared->htab_counter);
-
 	if (counter == UINT32_MAX ||
-		counter > (uint32)(hash_mem * (Size) 1024 / sizeof(DSMOptimizerTrackerEntry)))
+		counter > (uint32) (hash_mem *
+								(Size) 1024 / sizeof(DSMOptimizerTrackerEntry)))
 	{
 		/* TODO: set status of full hash table */
 		return false;
@@ -427,7 +438,7 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	track_attach_shmem();
 
 	if (!queryDesc->totaltime ||
-		!track_optimizer_enabled(queryDesc->estate->es_top_eflags) ||
+		!track_optimizer_enabled(queryDesc, queryDesc->estate->es_top_eflags) ||
 		queryDesc->plannedstmt->queryId == 0)
 		/*
 		 * Just to remember: a stranger extension can decide somewhere in the
@@ -596,11 +607,12 @@ to_reset(PG_FUNCTION_ARGS)
 {
 	dshash_seq_status			stat;
 	DSMOptimizerTrackerEntry   *entry;
-	uint32						pre = 1;
+	uint32						counter;
 
 	track_attach_shmem();
 
 	LWLockAcquire(&shared->lock, LW_EXCLUSIVE);
+	counter = pg_atomic_read_u32(&shared->htab_counter);
 
 	/*
 	 * Destroying shared hash table is a bit dangerous procedure. Without full
@@ -613,28 +625,35 @@ to_reset(PG_FUNCTION_ARGS)
 		Assert(entry->key.queryId != UINT64CONST(0) &&
 			   OidIsValid(entry->key.dbOid));
 
+		if (counter == 0)
+		{
+			/*
+			 * Exception behaviour: inconsistency between htab_counter and the
+			 * number of entries. Complain to the log once and afterwards
+			 * quietly remove entries.
+			 */
+			ereport(WARNING,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg("unexpected number of entries in the pg_track_optimizer HTAB"),
+					 errhint("look into the logs to discover leftovers")));
+			dshash_dump(htab);
+		}
+
+		counter--;
+
 		/* At first, free memory, allocated for the query text */
 		Assert(DsaPointerIsValid(entry->query_ptr));
 		dsa_free(htab_dsa, entry->query_ptr);
 
 		dshash_delete_current(&stat);
-		pre = pg_atomic_fetch_sub_u32(&shared->htab_counter, 1);
-
-		if (pre <= 0)
-		{
-			/* Trigger a reboot to clean up the state. I see no other solution */
-			elog(PANIC, "Inconsistency in the pg_track_optimizer hash table state");
-		}
 	}
 	dshash_seq_term(&stat);
 
-	Assert(pre == 1);
-
+	pg_atomic_write_u32(&shared->htab_counter, 0);
 	/* Clean disk storage too */
 	(void) _flush_hash_table();
 
 	LWLockRelease(&shared->lock);
-
 	PG_RETURN_VOID();
 }
 
@@ -647,7 +666,7 @@ to_reset(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(to_flush);
 
 static const uint32 DATA_FILE_HEADER	= 12354678;
-static const uint32 DATA_FORMAT_VERSION = 1;
+static const uint32 DATA_FORMAT_VERSION = 20251225;
 
 #define EXTENSION_NAME "pg_track_optimizer"
 static const char *filename = EXTENSION_NAME".stat";
@@ -746,6 +765,7 @@ error:
  * Read data file record by record and add each record into the new table
  * Provide reference to the shared area because the local pointer still not
  * initialized.
+ * TODO: we may add 'reload' option if user wants to fix a problem.
  */
 static bool
 _load_hash_table(TODSMRegistry *state)
@@ -761,7 +781,17 @@ _load_hash_table(TODSMRegistry *state)
 	track_attach_shmem();
 
 	/* We load data into an empty hash table */
-	Assert(pg_atomic_read_u32(&state->htab_counter) == 0);
+	if (pg_atomic_read_u32(&state->htab_counter) != 0)
+	{
+		/*
+		 * Production behaviour. Don't do anything, just give a clue what
+		 * the calling user may do to safely fix the problem.
+		 */
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("The pg_track_optimizer HTAB is not empty"),
+				 errhint("Reset hash table in advance")));
+	}
 
 	file = AllocateFile(filename, PG_BINARY_R);
 	if (file == NULL)
