@@ -13,6 +13,8 @@ DATA = pg_track_optimizer--0.1.sql
 
 REGRESS = pg_track_optimizer interface join_filtering rstats
 
+TAP_TESTS = 1
+
 ifdef USE_PGXS
 EXTRA_REGRESS_OPTS=--temp-config=$(CURDIR)/pg_track_optimizer.conf
 PG_CONFIG ?= pg_config

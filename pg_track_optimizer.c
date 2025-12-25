@@ -27,6 +27,7 @@
 #include "lib/dshash.h"
 #include "miscadmin.h"
 #include "nodes/queryjumble.h"
+#include "pgstat.h"
 #include "storage/dsm_registry.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
@@ -36,7 +37,14 @@
 #include "plan_error.h"
 #include "rstats.h"
 
+#if (PG_VERSION_NUM < 180000)
 PG_MODULE_MAGIC;
+#else
+PG_MODULE_MAGIC_EXT(
+					.name = "pg_track_optimizer",
+					.version = "0.1.9-devel"
+);
+#endif
 
 #define DATATBL_NCOLS	(13)
 
@@ -671,7 +679,7 @@ static const uint32 DATA_FILE_HEADER	= 12354678;
 static const uint32 DATA_FORMAT_VERSION = 20251225;
 
 #define EXTENSION_NAME "pg_track_optimizer"
-static const char *filename = EXTENSION_NAME".stat";
+static const char *filename = PG_STAT_TMP_DIR "/" EXTENSION_NAME".stat";
 
 /*
  * Specifics of the storage procedure of dshash table:
@@ -684,7 +692,7 @@ _flush_hash_table(void)
 {
 	dshash_seq_status			stat;
 	DSMOptimizerTrackerEntry   *entry;
-	const char				   *tmpfile = EXTENSION_NAME"%s.tmp";
+	const char				   *tmpfile = PG_STAT_TMP_DIR "/" EXTENSION_NAME"%s.tmp";
 	FILE					   *file;
 	uint32						counter = 0;
 	uint32						nrecs;
@@ -765,6 +773,9 @@ error:
  * Read data file record by record and add each record into the new table
  * Provide reference to the shared area because the local pointer still not
  * initialized.
+ * NOTE: Must be executed in safe state where no concurrency presents. Right now
+ * it is executed under the internal DSM lock. Identify it by checking that
+ * 'shared' variable is NULL.
  * TODO: we may add 'reload' option if user wants to fix a problem.
  */
 static bool
@@ -773,14 +784,21 @@ _load_hash_table(TODSMRegistry *state)
 	FILE					   *file;
 	uint32						header;
 	int32						pgver;
-	uint32						counter = 0;
 	DSMOptimizerTrackerEntry	disk_entry;
 	DSMOptimizerTrackerEntry   *entry;
 	uint32						nrecs;
+	uint32						i;
 
-	track_attach_shmem();
+	if (shared != NULL)
+	{
+		Assert(shared == NULL);
+		elog(WARNING,
+			 "[%s] unexpected state of shared memory. Do not load data",
+			 EXTENSION_NAME);
+		return false;
+	}
 
-	/* We load data into an empty hash table */
+	/* Must load data into an empty hash table */
 	if (pg_atomic_read_u32(&state->htab_counter) != 0)
 	{
 		/*
@@ -813,7 +831,7 @@ _load_hash_table(TODSMRegistry *state)
 
 	Assert(nrecs >= 0);
 
-	while (!feof(file))
+	for (i = 0; i < nrecs; i++)
 	{
 		char   *str;
 		uint32	len;
@@ -861,15 +879,25 @@ _load_hash_table(TODSMRegistry *state)
 		entry->query_ptr = disk_entry.query_ptr;
 
 		dshash_release_lock(htab, entry);
-		counter++;
 	}
 
-	Assert(counter == nrecs);
+	/*
+	 * Expect to get EOF/ If not - complain. Use assertion to identify the issue
+	 * during development cycle.
+	 */
+	if (fread(&disk_entry, 1, 1, file) == 1)
+	{
+		Assert(0);
+		ereport(WARNING,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("[%s] file \"%s\" contains more data than expected",
+				 EXTENSION_NAME, filename)));
+	}
 
 	FreeFile(file);
-	pg_atomic_write_u32(&state->htab_counter, counter);
+	pg_atomic_write_u32(&state->htab_counter, nrecs);
 	elog(LOG, "[%s] %u records loaded from file \"%s\"",
-		 EXTENSION_NAME, counter, filename);
+		 EXTENSION_NAME, nrecs, filename);
 	return true;
 
 read_error:
