@@ -7,10 +7,13 @@
 
 #include "postgres.h"
 
+#include "catalog/pg_type.h"
 #include "fmgr.h"
 #include "libpq/pqformat.h"
+#include "parser/parse_coerce.h"
 #include "utils/builtins.h"
 #include "utils/numeric.h"
+#include "utils/lsyscache.h"
 
 #include <math.h>
 
@@ -23,7 +26,9 @@ PG_FUNCTION_INFO_V1(rstats_recv);
 PG_FUNCTION_INFO_V1(rstats_send);
 
 PG_FUNCTION_INFO_V1(rstats_empty_constructor);
+PG_FUNCTION_INFO_V1(rstats_constructor);
 PG_FUNCTION_INFO_V1(rstats_init_double);
+PG_FUNCTION_INFO_V1(rstats_init_int4);
 PG_FUNCTION_INFO_V1(rstats_init_numeric);
 
 PG_FUNCTION_INFO_V1(rstats_add);
@@ -163,6 +168,39 @@ rstats_set_empty(RStats *result)
 	result->max = -1.;
 }
 
+static double
+get_double_value(Datum inputval, Oid argtype)
+{
+	double result;
+
+	switch (argtype)
+	{
+	case FLOAT8OID:
+		result = DatumGetFloat8(inputval);
+		break;
+	case INT4OID:
+		result = DatumGetInt32(inputval);
+		break;
+	case UNKNOWNOID:
+	{
+		text   *txt = DatumGetTextPP(inputval);
+		char   *str = text_to_cstring(txt);
+		Datum	value;
+
+		/* Convert to your target type, e.g., float8 */
+		value = DirectFunctionCall1(float8in, CStringGetDatum(str));
+		result = DatumGetFloat8(value);
+		argtype = FLOAT8OID;
+	}
+		break;
+	default:
+			elog(ERROR, "unsupported input type");
+			break;
+	}
+
+	return result;
+}
+
 Datum
 rstats_empty_constructor(PG_FUNCTION_ARGS)
 {
@@ -172,6 +210,68 @@ rstats_empty_constructor(PG_FUNCTION_ARGS)
 	rstats_set_empty(result);
 
 	PG_RETURN_POINTER(result);
+}
+
+Datum
+rstats_constructor(PG_FUNCTION_ARGS)
+{
+	RStats			   *result;
+	Datum				inputval;
+	CoercionPathType	pathtype;
+	Oid					elemtype;
+	Oid					funcid;
+	Datum				element;
+
+	Assert(PG_NARGS() == 1);
+
+	if (PG_ARGISNULL(0))
+		elog(ERROR, "no NULL values allowed");
+
+	elemtype = get_fn_expr_argtype(fcinfo->flinfo, 0);
+	if (elemtype == InvalidOid)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("could not determine data type of input")));
+
+	inputval = PG_GETARG_DATUM(0);
+
+	pathtype = find_coercion_pathway(FLOAT8OID, elemtype,
+									 COERCION_EXPLICIT, &funcid);
+
+	if (pathtype == COERCION_PATH_FUNC)
+	{
+		/* Use the cast function */
+		element = OidFunctionCall1(funcid, inputval);
+	}
+	else if (pathtype == COERCION_PATH_RELABELTYPE)
+	{
+		/* Binary compatible, just relabel */
+		element = inputval;
+	}
+	else if (pathtype == COERCION_PATH_COERCEVIAIO)
+	{
+		/* Convert via text representation */
+		Oid		outfuncid;
+		Oid		infuncid;
+		bool	typisvarlena;
+		char   *str;
+
+		getTypeOutputInfo(elemtype, &outfuncid, &typisvarlena);
+		str = OidOutputFunctionCall(outfuncid, inputval);
+
+		getTypeInputInfo(elemtype, &infuncid, &outfuncid);
+		element = OidInputFunctionCall(infuncid, str, outfuncid, -1);
+	}
+	else
+		ereport(ERROR,
+			(errcode(ERRCODE_CANNOT_COERCE),
+			 errmsg("cannot cast type %s to double precision",
+			 format_type_be(elemtype))));
+
+	result = (RStats *) palloc(sizeof(RStats));
+	rstats_init_internal(result, DatumGetFloat8(element));
+
+	PG_RETURN_RSTATS_P(result);
 }
 
 /*
@@ -208,7 +308,17 @@ rstats_init_double(PG_FUNCTION_ARGS)
 
 	PG_RETURN_RSTATS_P(result);
 }
+Datum
+rstats_init_int4(PG_FUNCTION_ARGS)
+{
+	double		value = PG_GETARG_INT32(0);
+	RStats	   *result;
 
+	result = (RStats *) palloc(sizeof(RStats));
+	rstats_init_internal(result, value);
+
+	PG_RETURN_RSTATS_P(result);
+}
 Datum
 rstats_init_numeric(PG_FUNCTION_ARGS)
 {
@@ -277,7 +387,19 @@ Datum
 rstats_add(PG_FUNCTION_ARGS)
 {
 	RStats *stats = PG_GETARG_RSTATS_P(0);
-	double	value = PG_GETARG_FLOAT8(1);
+	Oid		argtype;
+	double	value;
+
+	if (PG_ARGISNULL(1))
+		elog(ERROR, "input value cannot be null");
+
+	argtype = get_fn_expr_argtype(fcinfo->flinfo, 1);
+	if (argtype == InvalidOid)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("could not determine data type of input")));
+
+	value = get_double_value(PG_GETARG_DATUM(1), argtype);
 
 	rstats_add_value(stats, value);
 

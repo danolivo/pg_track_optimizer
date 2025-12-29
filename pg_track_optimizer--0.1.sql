@@ -2,6 +2,11 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION pg_track_optimizer" to load this file. \quit
 
+/* *****************************************************************************
+ *
+ * The RStats' base type definition is here
+ *
+ * ****************************************************************************/
 
 CREATE TYPE rstats;
 
@@ -36,8 +41,8 @@ CREATE TYPE rstats (
   SEND           = rstats_send,
   ALIGNMENT      = double
 );
-
-COMMENT ON TYPE rstats IS 'Incremental statistics type using Welford''s algorithm';
+COMMENT ON TYPE rstats IS
+  'Incremental statistics type using Welford''s algorithm';
 
 --
 -- Initialization operator (double precision -> rstats)
@@ -47,7 +52,15 @@ CREATE FUNCTION rstats() RETURNS rstats
 AS 'MODULE_PATHNAME', 'rstats_empty_constructor'
 LANGUAGE C IMMUTABLE PARALLEL SAFE;
 
+CREATE FUNCTION rstats(ANYELEMENT) RETURNS rstats
+AS 'MODULE_PATHNAME', 'rstats_constructor'
+LANGUAGE C IMMUTABLE PARALLEL SAFE;
+
 CREATE FUNCTION rstats_init_double(double precision)
+RETURNS rstats
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION rstats_init_int4(integer)
 RETURNS rstats
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
@@ -59,6 +72,9 @@ LANGUAGE C IMMUTABLE STRICT;
 -- Cast to rstats
 CREATE CAST (double precision AS rstats)
 WITH FUNCTION rstats_init_double(double precision)
+AS IMPLICIT;
+CREATE CAST (integer AS rstats)
+WITH FUNCTION rstats_init_int4(integer)
 AS IMPLICIT;
 CREATE CAST (numeric AS rstats)
 WITH FUNCTION rstats_init_numeric(numeric)
@@ -72,7 +88,14 @@ CREATE FUNCTION rstats_add(rstats, double precision)
 RETURNS rstats
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
-COMMENT ON FUNCTION rstats_add(rstats, double precision) IS 'Add a new value to running statistics using Welford''s algorithm';
+COMMENT ON FUNCTION rstats_add(rstats, double precision)
+  IS 'Add a new double value to running statistics';
+CREATE FUNCTION rstats_add(rstats, integer)
+RETURNS rstats
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+COMMENT ON FUNCTION rstats_add(rstats, integer)
+  IS 'Add a new integer value to running statistics';
 
 CREATE OPERATOR + (
   LEFTARG  = rstats,
@@ -80,7 +103,17 @@ CREATE OPERATOR + (
   FUNCTION = rstats_add,
   COMMUTATOR = +
 );
-COMMENT ON OPERATOR + (rstats, double precision) IS 'Add a value to running statistics';
+COMMENT ON OPERATOR + (rstats, double precision)
+  IS 'Add a double value to running statistics';
+
+CREATE OPERATOR + (
+  LEFTARG  = rstats,
+  RIGHTARG = integer,
+  FUNCTION = rstats_add,
+  COMMUTATOR = +
+);
+COMMENT ON OPERATOR + (rstats, integer)
+  IS 'Add an integer value to running statistics';
 
 -- Equality comparison operator
 CREATE FUNCTION rstats_eq(rstats, rstats)
@@ -88,7 +121,8 @@ CREATE FUNCTION rstats_eq(rstats, rstats)
     AS 'MODULE_PATHNAME', 'rstats_eq'
     LANGUAGE C IMMUTABLE STRICT;
 
-COMMENT ON FUNCTION rstats_eq(rstats, rstats) IS 'Check equality of two rstats objects';
+COMMENT ON FUNCTION rstats_eq(rstats, rstats)
+  IS 'Check equality of two rstats objects';
 
 CREATE OPERATOR = (
   LEFTARG  = rstats,
@@ -105,7 +139,8 @@ RETURNS double precision
 AS 'MODULE_PATHNAME', 'rstats_get_field'
 LANGUAGE C IMMUTABLE STRICT;
 
-COMMENT ON FUNCTION rstats_get_field(rstats, text) IS 'Access rstats field by name using -> operator';
+COMMENT ON FUNCTION rstats_get_field(rstats, text)
+  IS 'Access rstats field by name using -> operator';
 
 CREATE OPERATOR -> (
   LEFTARG  = rstats,
@@ -113,7 +148,14 @@ CREATE OPERATOR -> (
   FUNCTION = rstats_get_field
 );
 
-COMMENT ON OPERATOR -> (rstats, text) IS 'Field accessor operator for rstats type (e.g., stats -> ''mean'')';
+COMMENT ON OPERATOR -> (rstats, text)
+  IS 'Field accessor operator for rstats type (e.g., stats -> ''mean'')';
+
+/* *****************************************************************************
+ *
+ * The pg_track_optimizer's UI objects is defined here
+ *
+ * ****************************************************************************/
 
 CREATE FUNCTION pg_track_optimizer(
 	OUT dboid			Oid,
