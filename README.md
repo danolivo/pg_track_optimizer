@@ -149,6 +149,7 @@ LIMIT 10;
 | `blks_accessed` | rstats | Running statistics of blocks accessed per execution. |
 | `local_blks` | rstats | Running statistics of local blocks (read + written + dirtied) per execution. Local blocks indicate temporary tables or sorts spilling to disk, signaling insufficient work_mem. |
 | `exec_time` | rstats | Execution time per query in milliseconds. Tracks running statistics of execution times across query executions. |
+| `max_join_filtered` | rstats | Maximum filtered rows (nfiltered1 + nfiltered2) across all JOIN nodes per execution. Tracks running statistics across executions. High values indicate JOINs that filter many tuples, suggesting potential for optimization with parameterized NestLoop or missing indexes. |
 | `evaluated_nodes` | integer | Number of plan nodes analysed |
 | `plan_nodes` | integer | Total plan nodes (some may be skipped, e.g., never-executed branches) |
 | `nexecs` | bigint | Number of times the query was executed |
