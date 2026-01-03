@@ -48,7 +48,7 @@ PG_MODULE_MAGIC_EXT(
 );
 #endif
 
-#define DATATBL_NCOLS	(13)
+#define DATATBL_NCOLS	(14)
 
 typedef struct TODSMRegistry
 {
@@ -105,6 +105,7 @@ typedef struct DSMOptimizerTrackerEntry
 	RStats					blks_accessed;		/* Block I/O (hits + reads + writes) - running stats */
 	RStats					local_blks;			/* Local blocks (read + written + dirtied) - work_mem indicator */
 	RStats					exec_time;			/* Execution time per query - running stats (milliseconds) */
+	RStats					max_join_filtered;	/* Maximum filtered rows (nfiltered1+nfiltered2) across JOIN nodes */
 	int64					nexecs;				/* Number of executions tracked */
 
 	/* Metadata */
@@ -405,6 +406,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		rstats_set_empty(&entry->blks_accessed);
 		rstats_set_empty(&entry->local_blks);
 		rstats_set_empty(&entry->exec_time);
+		rstats_set_empty(&entry->max_join_filtered);
 
 		entry->nexecs = 0;
 
@@ -434,6 +436,8 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	rstats_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
 	Assert(ctx->local_blks >= 0);
 	rstats_add_value(&entry->local_blks, (double) ctx->local_blks);
+	Assert(ctx->max_join_filtered >= 0);
+	rstats_add_value(&entry->max_join_filtered, (double) ctx->max_join_filtered);
 
 	/* Accumulate execution-level totals */
 	Assert(ctx->totaltime >= 0.);
@@ -602,6 +606,7 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 		values[i++] = RStatsPGetDatum(&entry->blks_accessed);
 		values[i++] = RStatsPGetDatum(&entry->local_blks);
 		values[i++] = RStatsPGetDatum(&entry->exec_time);
+		values[i++] = RStatsPGetDatum(&entry->max_join_filtered);
 
 		values[i++] = Int32GetDatum(entry->evaluated_nodes);
 		values[i++] = Int32GetDatum(entry->plan_nodes);
@@ -1037,6 +1042,7 @@ _load_hash_table(TODSMRegistry *state)
 		memcpy(&entry->blks_accessed, &disk_entry.blks_accessed, sizeof(RStats));
 		memcpy(&entry->local_blks, &disk_entry.local_blks, sizeof(RStats));
 		memcpy(&entry->exec_time, &disk_entry.exec_time, sizeof(RStats));
+		memcpy(&entry->max_join_filtered, &disk_entry.max_join_filtered, sizeof(RStats));
 		entry->nexecs = disk_entry.nexecs;
 		entry->query_ptr = disk_entry.query_ptr;
 

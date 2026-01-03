@@ -197,6 +197,23 @@ prediction_walker(PlanState *pstate, void *context)
 		ctx->wca_error += node_error * relative_cost;
 	}
 
+	/*
+	 * Track maximum filtered rows for JOIN nodes.
+	 * JOIN nodes filter rows that don't match join conditions, and tracking
+	 * the maximum across all JOINs helps identify queries with inefficient
+	 * join strategies or missing indexes.
+	 */
+	if (IsA(pstate->plan, NestLoop) ||
+		IsA(pstate->plan, HashJoin) ||
+		IsA(pstate->plan, MergeJoin))
+	{
+		int64	join_filtered = pstate->instrument->nfiltered1 +
+								pstate->instrument->nfiltered2;
+
+		if (join_filtered > ctx->max_join_filtered)
+			ctx->max_join_filtered = join_filtered;
+	}
+
 	ctx->nnodes++;
 	return false;
 }
@@ -241,6 +258,9 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	ctx->local_blks = queryDesc->totaltime->bufusage.local_blks_read +
 					  queryDesc->totaltime->bufusage.local_blks_written +
 					  queryDesc->totaltime->bufusage.local_blks_dirtied;
+
+	/* Initialize JOIN filtering statistics */
+	ctx->max_join_filtered = 0;
 
 	Assert(ctx->totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);
