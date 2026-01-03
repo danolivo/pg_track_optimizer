@@ -40,6 +40,11 @@ CREATE EXTENSION pg_track_optimizer;
  time_cnt        | double precision |           |          | 
  time_avg        | double precision |           |          | 
  time_dev        | double precision |           |          | 
+ jf_min          | double precision |           |          | 
+ jf_max          | double precision |           |          | 
+ jf_cnt          | double precision |           |          | 
+ jf_avg          | double precision |           |          | 
+ jf_dev          | double precision |           |          | 
  evaluated_nodes | integer          |           |          | 
  plan_nodes      | integer          |           |          | 
  nexecs          | bigint           |           |          | 
