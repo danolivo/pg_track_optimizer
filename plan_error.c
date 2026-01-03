@@ -214,6 +214,20 @@ prediction_walker(PlanState *pstate, void *context)
 			ctx->max_join_filtered = join_filtered;
 	}
 
+	/*
+	 * Track maximum nfiltered1 for leaf nodes.
+	 * Leaf nodes are scan nodes that directly access data sources.
+	 * High nfiltered1 values indicate many rows were fetched but filtered out,
+	 * suggesting potential for better indexes or more selective predicates.
+	 */
+	if (tmp_counter == ctx->counter)
+	{
+		int64	leaf_filtered = pstate->instrument->nfiltered1;
+
+		if (leaf_filtered > ctx->max_leaf_filtered)
+			ctx->max_leaf_filtered = leaf_filtered;
+	}
+
 	ctx->nnodes++;
 	return false;
 }
@@ -261,6 +275,9 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 	/* Initialize JOIN filtering statistics */
 	ctx->max_join_filtered = 0;
+
+	/* Initialize leaf node filtering statistics */
+	ctx->max_leaf_filtered = 0;
 
 	Assert(ctx->totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);
