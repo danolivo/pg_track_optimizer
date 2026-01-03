@@ -168,6 +168,7 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT blks_accessed   rstats,
 	OUT local_blks      rstats,
 	OUT exec_time       rstats,
+	OUT max_join_filtered rstats,
 	OUT evaluated_nodes integer,
 	OUT plan_nodes      integer,
 	OUT nexecs          bigint
@@ -217,6 +218,11 @@ CREATE VIEW pg_track_optimizer AS SELECT
   t.exec_time -> 'min' AS time_min, t.exec_time -> 'max' AS time_max,
   t.exec_time -> 'count' AS time_cnt,
   t.exec_time -> 'mean' AS time_avg, t.exec_time -> 'stddev' AS time_dev,
+
+  /* Maximum JOIN filtered rows statistics */
+  t.max_join_filtered -> 'min' AS jf_min, t.max_join_filtered -> 'max' AS jf_max,
+  t.max_join_filtered -> 'count' AS jf_cnt,
+  t.max_join_filtered -> 'mean' AS jf_avg, t.max_join_filtered -> 'stddev' AS jf_dev,
 
   t.evaluated_nodes, t.plan_nodes, t.nexecs
 FROM pg_track_optimizer() t, pg_database d

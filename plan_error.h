@@ -48,6 +48,9 @@ typedef struct PlanEstimatorContext
 	/* Buffer usage statistics for this query execution */
 	int64	blks_accessed;	/* Sum of all block hits, reads, and writes */
 	int64	local_blks;		/* Local blocks (read + written + dirtied) - indicates work_mem issues */
+
+	/* JOIN filtering statistics */
+	int64	max_join_filtered;	/* Maximum filtered rows (nfiltered1+nfiltered2) across all JOIN nodes */
 } PlanEstimatorContext;
 
 extern double plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx);
