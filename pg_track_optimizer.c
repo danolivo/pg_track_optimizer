@@ -326,12 +326,13 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 	 * debug_query_string to identify just which statement is being
 	 * reported.  This isn't ideal but trying to do it here would
 	 * often result in duplication.
-	 * NOTE: Don't afraid special symbols inside a query: errmsg works out this
-	 * issue (see, autoexplain do the same).
+	 * NOTE: Don't afraid special symbols inside a query plan: errmsg works out
+	 * this issue (see, autoexplain do the same).
 	 */
 	ereport(LOG,
-			(errmsg("duration: %.3f ms, relative error: %.4lf, plan:\n%s",
-					msec, normalized_error, es->str->data),
+			(errmsg("queryId: "INT64_FORMAT" duration: %.3f ms, relative error: %.4lf, plan:\n%s",
+					queryDesc->plannedstmt->queryId, msec, normalized_error,
+					es->str->data),
 			 errhidestmt(true)));
 }
 
