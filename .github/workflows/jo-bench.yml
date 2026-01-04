@@ -94,6 +94,7 @@ jobs:
         cat >> $HOME/pgdata/postgresql.conf <<EOF
         shared_preload_libraries = 'pg_track_optimizer'
         pg_track_optimizer.mode = 'forced'
+        pg_track_optimizer.log_min_error = 0.0 # print all plan states
         compute_query_id = on
         max_worker_processes = 8
         max_parallel_workers = 8
