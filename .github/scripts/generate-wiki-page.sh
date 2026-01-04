@@ -26,6 +26,30 @@ PG_COMMIT=$(cd ~/postgresql && git rev-parse HEAD)
 # Read benchmark results
 BENCHMARK_RESULTS=$(cat "$RESULTS_FILE")
 
+# Generate schema dynamically from pg_track_optimizer view
+SCHEMA_SQL=$(psql -d jobench -t -c "
+  SELECT 'CREATE TABLE job_tracking_data (' || E'\n' ||
+         string_agg('  ' || column_name || ' ' ||
+                    CASE
+                      WHEN data_type = 'USER-DEFINED' THEN 'double precision'
+                      WHEN data_type = 'character varying' THEN 'text'
+                      ELSE data_type
+                    END ||
+                    CASE WHEN column_name != last_col THEN ',' ELSE '' END,
+                    E'\n' ORDER BY ordinal_position) ||
+         E'\n' || ');'
+  FROM (
+    SELECT
+      column_name,
+      data_type,
+      ordinal_position,
+      LAST_VALUE(column_name) OVER (ORDER BY ordinal_position ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_col
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'pg_track_optimizer'
+  ) cols;
+")
+
 # Navigate to wiki directory
 cd "$WIKI_DIR"
 
@@ -35,6 +59,19 @@ git config user.email "github-actions[bot]@users.noreply.github.com"
 
 # Create wiki page filename with date
 WIKI_PAGE="JO-Bench-Results-$(date -u '+%Y-%m-%d-%H%M%S').md"
+SCHEMA_FILE="JO-Bench-Schema-$(date -u '+%Y-%m-%d-%H%M%S').sql"
+
+# Create schema SQL file
+cat > "$SCHEMA_FILE" <<EOF
+-- Auto-generated schema for importing pg_track_optimizer JO-Bench results
+-- Generated on: ${TEST_DATE}
+-- Extension commit: ${EXT_COMMIT:0:7}
+
+${SCHEMA_SQL}
+
+-- Import command:
+-- \copy job_tracking_data FROM 'pg_track_optimizer_results.csv' CSV HEADER;
+EOF
 
 # Create wiki page content
 cat > "$WIKI_PAGE" <<EOF
@@ -79,59 +116,10 @@ The workflow produces a CSV artifact (\`pg_track_optimizer_jobench_results\`) co
 
 ### 1. Create the tracking table
 
+The schema is auto-generated to match the current \`pg_track_optimizer\` view definition. Download the schema file: [${SCHEMA_FILE}](${SCHEMA_FILE%.sql})
+
 \`\`\`sql
-CREATE TABLE job_tracking_data (
-  queryid          bigint,
-  query            text,
-  avg_min          double precision,
-  avg_max          double precision,
-  avg_cnt          double precision,
-  avg_avg          double precision,
-  avg_dev          double precision,
-  rms_min          double precision,
-  rms_max          double precision,
-  rms_cnt          double precision,
-  rms_avg          double precision,
-  rms_dev          double precision,
-  twa_min          double precision,
-  twa_max          double precision,
-  twa_cnt          double precision,
-  twa_avg          double precision,
-  twa_dev          double precision,
-  wca_min          double precision,
-  wca_max          double precision,
-  wca_cnt          double precision,
-  wca_avg          double precision,
-  wca_dev          double precision,
-  blks_min         double precision,
-  blks_max         double precision,
-  blks_cnt         double precision,
-  blks_avg         double precision,
-  blks_dev         double precision,
-  local_min        double precision,
-  local_max        double precision,
-  local_cnt        double precision,
-  local_avg        double precision,
-  local_dev        double precision,
-  time_min         double precision,
-  time_max         double precision,
-  time_cnt         double precision,
-  time_avg         double precision,
-  time_dev         double precision,
-  jf_min           double precision,
-  jf_max           double precision,
-  jf_cnt           double precision,
-  jf_avg           double precision,
-  jf_dev           double precision,
-  lf_min           double precision,
-  lf_max           double precision,
-  lf_cnt           double precision,
-  lf_avg           double precision,
-  lf_dev           double precision,
-  evaluated_nodes  integer,
-  plan_nodes       integer,
-  nexecs           bigint
-);
+${SCHEMA_SQL}
 \`\`\`
 
 ### 2. Import the CSV artifact
@@ -204,7 +192,7 @@ HOMEEOF
 fi
 
 # Commit and push to wiki repository
-git add "$WIKI_PAGE" Home.md
+git add "$WIKI_PAGE" "$SCHEMA_FILE" Home.md
 git commit -m "Add JO-Bench results for ${TEST_DATE}"
 git push origin master || {
   echo "Failed to push wiki page. This might be due to permissions."
@@ -212,4 +200,5 @@ git push origin master || {
 }
 
 echo "Wiki page created: $WIKI_PAGE"
+echo "Schema file created: $SCHEMA_FILE"
 echo "Home page updated with link to new results"
