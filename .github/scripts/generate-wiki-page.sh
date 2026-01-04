@@ -27,7 +27,7 @@ PG_COMMIT=$(cd ~/postgresql && git rev-parse HEAD)
 BENCHMARK_RESULTS=$(cat "$RESULTS_FILE")
 
 # Generate schema dynamically from pg_track_optimizer view
-SCHEMA_SQL=$(psql -d jobench -t -c "
+SCHEMA_SQL=$(psql -d jobench -t -A -c "
   SELECT 'CREATE TABLE job_tracking_data (' || E'\n' ||
          string_agg('  ' || column_name || ' ' ||
                     CASE
@@ -116,11 +116,7 @@ The workflow produces a CSV artifact (\`pg_track_optimizer_jobench_results\`) co
 
 ### 1. Create the tracking table
 
-The schema is auto-generated to match the current \`pg_track_optimizer\` view definition. Download the schema file: [${SCHEMA_FILE}](${SCHEMA_FILE%.sql})
-
-\`\`\`sql
-${SCHEMA_SQL}
-\`\`\`
+The schema is auto-generated to match the current \`pg_track_optimizer\` view definition. Download the schema file: [${SCHEMA_FILE}](${SCHEMA_FILE})
 
 ### 2. Import the CSV artifact
 
