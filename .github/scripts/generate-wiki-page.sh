@@ -67,9 +67,107 @@ The results above include the following metrics for each query:
 - **blks_avg, blks_min, blks_max, blks_cnt, blks_dev**: Block access statistics across all executions
 - **local_avg, local_min, local_max, local_cnt, local_dev**: Local block statistics (work_mem indicator - sorts/joins spilling to disk)
 - **time_avg, time_min, time_max, time_cnt, time_dev**: Execution time statistics per query (milliseconds)
+- **jf_avg, jf_min, jf_max, jf_cnt, jf_dev**: Maximum JOIN filtered rows statistics (detects queries with inefficient join strategies)
+- **lf_avg, lf_min, lf_max, lf_cnt, lf_dev**: Maximum leaf node filtered rows statistics (detects scans fetching many rows that get filtered)
 - **nexecs**: Number of times the query was executed
 
 Only queries appearing in the top 10 of **every** error metric are shown, representing the most consistently problematic queries.
+
+## How to Use Workflow Artifacts
+
+The workflow produces a CSV artifact (\`pg_track_optimizer_jobench_results\`) containing complete benchmark results for all queries. You can download this artifact from the workflow run and import it into your own PostgreSQL database for analysis.
+
+### 1. Create the tracking table
+
+\`\`\`sql
+CREATE TABLE job_tracking_data (
+  queryid          bigint,
+  query            text,
+  avg_min          double precision,
+  avg_max          double precision,
+  avg_cnt          double precision,
+  avg_avg          double precision,
+  avg_dev          double precision,
+  rms_min          double precision,
+  rms_max          double precision,
+  rms_cnt          double precision,
+  rms_avg          double precision,
+  rms_dev          double precision,
+  twa_min          double precision,
+  twa_max          double precision,
+  twa_cnt          double precision,
+  twa_avg          double precision,
+  twa_dev          double precision,
+  wca_min          double precision,
+  wca_max          double precision,
+  wca_cnt          double precision,
+  wca_avg          double precision,
+  wca_dev          double precision,
+  blks_min         double precision,
+  blks_max         double precision,
+  blks_cnt         double precision,
+  blks_avg         double precision,
+  blks_dev         double precision,
+  local_min        double precision,
+  local_max        double precision,
+  local_cnt        double precision,
+  local_avg        double precision,
+  local_dev        double precision,
+  time_min         double precision,
+  time_max         double precision,
+  time_cnt         double precision,
+  time_avg         double precision,
+  time_dev         double precision,
+  jf_min           double precision,
+  jf_max           double precision,
+  jf_cnt           double precision,
+  jf_avg           double precision,
+  jf_dev           double precision,
+  lf_min           double precision,
+  lf_max           double precision,
+  lf_cnt           double precision,
+  lf_avg           double precision,
+  lf_dev           double precision,
+  evaluated_nodes  integer,
+  plan_nodes       integer,
+  nexecs           bigint
+);
+\`\`\`
+
+### 2. Import the CSV artifact
+
+\`\`\`
+\copy job_tracking_data FROM 'pg_track_optimizer_results.csv' CSV HEADER;
+\`\`\`
+
+### 3. Example analysis queries
+
+Find queries with highest average error:
+\`\`\`sql
+SELECT queryid, LEFT(query, 80) as query_preview, avg_avg, rms_avg, twa_avg, wca_avg
+FROM job_tracking_data
+ORDER BY avg_avg DESC
+LIMIT 10;
+\`\`\`
+
+Find queries appearing in top 10 of all error metrics (most consistently problematic):
+\`\`\`sql
+WITH
+  top_avg AS (SELECT queryid FROM job_tracking_data ORDER BY avg_avg DESC LIMIT 10),
+  top_rms AS (SELECT queryid FROM job_tracking_data ORDER BY rms_avg DESC LIMIT 10),
+  top_twa AS (SELECT queryid FROM job_tracking_data ORDER BY twa_avg DESC LIMIT 10),
+  top_wca AS (SELECT queryid FROM job_tracking_data ORDER BY wca_avg DESC LIMIT 10),
+  intersection AS (
+    SELECT queryid FROM top_avg
+    INTERSECT SELECT queryid FROM top_rms
+    INTERSECT SELECT queryid FROM top_twa
+    INTERSECT SELECT queryid FROM top_wca
+  )
+SELECT t.*
+FROM job_tracking_data t
+WHERE t.queryid IN (SELECT queryid FROM intersection)
+ORDER BY t.avg_avg DESC;
+\`\`\`
 
 ---
 
