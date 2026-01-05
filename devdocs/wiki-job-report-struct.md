@@ -1,6 +1,6 @@
 # Wiki JOB Report Structure Documentation
 
-This document describes the standardized structure for Join Order Benchmark (JOB) test reports published to the pg_track_optimizer wiki. The jo-bench.yml workflow must generate reports consistent with this structure.
+This document describes the standardized structure for Join Order Benchmark (JOB) test reports published to the pg_track_optimizer wiki. The jo-bench.yml workflow must generate reports consistent with this document.
 
 ## Report File Naming Convention
 
@@ -12,7 +12,7 @@ The timestamp corresponds to the test execution date/time in UTC format.
 
 ## Artifact Directory Structure
 
-All test artifacts are organized in subdirectories within the wiki repository:
+All test artifacts and generated scripts are organized in subdirectories within the wiki repository:
 
 ```
 wiki/
@@ -32,20 +32,24 @@ wiki/job-pass/2026-01-05-084656/
 ### Artifact Files
 
 1. **`pg_track_optimizer_jobench_results_pass1.zip`**
+   - Dump the extension's statistical data to analyse later. It is copied to wiki's repository right after the JOB pass has finalised.
    - Contains: CSV file with Pass 1 results (without extra indexes)
    - Generated from: `/tmp/pg_track_optimizer_results_pass1.csv`
 
 2. **`pg_track_optimizer_jobench_results_pass2.zip`**
+   - Dump the extension's statistical data to analyse later. It is copied to wiki's repository right after the JOB pass has finalised.
    - Contains: CSV file with Pass 2 results (with extra indexes)
    - Generated from: `/tmp/pg_track_optimizer_results_pass2.csv`
 
 3. **`postgresql_log.zip`**
+   - Save EXPLAINs logged by the extension to match execution results. It is copied to wiki's repository right after the JOB pass has finalised.
    - Contains: PostgreSQL server log with EXPLAIN ANALYZE dumps
-   - Source: `~/pgdata/logfile`
-   - Each query execution includes queryId for matching to tracker records
+   - Source: `~/pgdata/logfile.log`
+   - Each query execution includes queryId for matching to tracker records (this is provided by the extension's print format itself, no extra actions needed in workflow)
 
 4. **`schema.sql`**
    - Auto-generated CREATE TABLE statement
+   - An example of COPY command restoring data from a state dump.
    - Schema matches current `pg_track_optimizer` view definition
    - Used for importing CSV artifacts into analysis database
 
@@ -85,10 +89,20 @@ wiki/job-pass/2026-01-05-084656/
 ```markdown
 ## Top Queries by Error Metrics (Pass 1 - basic Join-Order-Benchmark)
 
-TODO - the same query and report as for pass 2.
-```
+This table shows queries that appear in the top 10 for **all** error metrics (avg_avg, rms_avg, twa_avg, and wca_avg). These are the queries with consistently poor estimation across all criteria.
 
-**Status**: Currently placeholder. Should eventually contain same format as Pass 2 results.
+**Note**: These results are from **Pass 1** (without extra indexes).
+```
+**Example**:
+```
+       queryid        |        query        |  error
+----------------------+---------------------+--------
+  8437282107574130241 | /* 30c.sql */      +|  4.35
+ -8317260399803614106 | /* 28c.sql */      +|  4.07
+ -1799126654562256384 | /* 29c.sql */      +|  3.74
+  3901602676749870732 | /* 7c.sql */       +|  3.63
+(4 rows)
+```
 
 ### 4. Results Section - Pass 2
 
@@ -100,6 +114,9 @@ This table shows queries that appear in the top 10 for **all** error metrics (av
 **Note**: These results are from **Pass 2** (with extra indexes). Pass 1 results (without extra indexes) are available as a separate artifact for comparison.
 
 ```
+
+**Example**:
+```
        queryid        |        query        |  error
 ----------------------+---------------------+--------
   8437282107574130241 | /* 30c.sql */      +|  4.35
@@ -108,12 +125,11 @@ This table shows queries that appear in the top 10 for **all** error metrics (av
   3901602676749870732 | /* 7c.sql */       +|  3.63
 (4 rows)
 ```
-```
 
 **Table Format**:
 - **3 columns**: queryid, query, error
-- **Query column**: Shows the SQL comment (e.g., `/* 30c.sql */`) followed by `+` line continuation
-- **Error column**: Single aggregated error metric (average across all error types)
+- **Query column**: Shows 32 first symbols of the SQL (e.g., `/* 30c.sql */`).
+- **Error column**: Single aggregated error metric (represents a mean field of simple average RStats error column)
 - Use PostgreSQL psql output format (not markdown table)
 - Include row count footer: `(N rows)`
 
@@ -131,9 +147,7 @@ WITH
     INTERSECT SELECT queryid FROM top_wca
   )
 SELECT
-  v.queryid,
-  v.query,
-  ROUND((v.avg_avg + v.rms_avg + v.twa_avg + v.wca_avg) / 4.0, 2) as error
+  v.queryid, LEFT(v.query, 32), ROUND((v.avg_avg, 2) as error
 FROM pg_track_optimizer v
 WHERE v.queryid IN (SELECT queryid FROM intersection)
 ORDER BY error DESC;
@@ -309,20 +323,6 @@ git commit -m "Add JO-Bench results for ${TEST_DATE}"
 git push origin master
 ```
 
-## Key Differences from Previous Structure
-
-| Aspect | Previous | Current |
-|--------|----------|---------|
-| Title | "JO-Bench Results" | "Join Order Benchmark Test Results" |
-| Results sections | Single section | Two sections (Pass 1 + Pass 2) |
-| Results table | Full pg_track_optimizer columns | Simplified 3-column format |
-| Table format | Could be markdown | PostgreSQL psql output format |
-| Artifacts location | Wiki root | `job-pass/TIMESTAMP/` subdirectory |
-| Artifact format | CSV files | ZIP archives |
-| Schema file | Separate wiki page | File in artifact directory |
-| Metadata | 4 fields | 6 fields (added Test Configuration + Benchmark Source) |
-| PostgreSQL log | Not mentioned | Explicitly linked with usage instructions |
-
 ## Validation Checklist
 
 Before publishing a report, verify:
@@ -350,3 +350,11 @@ Before publishing a report, verify:
 - [ ] Add comparative analysis between Pass 1 and Pass 2
 - [ ] Consider adding summary statistics section
 - [ ] Explore visualization options for error metrics comparison
+
+# Extra Requirements for Claude
+
+- Never change this document automatically.
+- Keep report page as laconic as possible. In case of wordy material prefer to fold it into an attachement.
+- Always ask questions if you're not sure about your decision.
+- Check workflows on consistency with this document.
+- Re-check consistency of this document before using it.
