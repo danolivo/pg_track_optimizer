@@ -83,10 +83,13 @@ cat > "$WIKI_PAGE" <<EOF
 - **PostgreSQL Version**: ${PG_VERSION}
 - **PostgreSQL Commit**: [\`${PG_COMMIT:0:7}\`](https://github.com/postgres/postgres/commit/${PG_COMMIT})
 - **Extension Commit**: [\`${EXT_COMMIT:0:7}\`](https://github.com/danolivo/pg_track_optimizer/commit/${EXT_COMMIT})
+- **Test Configuration**: Two-pass testing (Pass 1: no extra indexes, Pass 2: with [extra indexes](Extra-Indexing))
 
-## Top Queries by Error Metrics
+## Top Queries by Error Metrics (Pass 2 - with extra indexes)
 
 This table shows queries that appear in the top 10 for **all** error metrics (avg_avg, rms_avg, twa_avg, and wca_avg). These are the queries with consistently poor estimation across all criteria.
+
+**Note**: These results are from **Pass 2** (with extra indexes). Pass 1 results (without extra indexes) are available as a separate artifact for comparison.
 
 \`\`\`
 ${BENCHMARK_RESULTS}
@@ -112,7 +115,12 @@ Only queries appearing in the top 10 of **every** error metric are shown, repres
 
 ## How to Use Workflow Artifacts
 
-The workflow produces a CSV artifact (\`pg_track_optimizer_jobench_results\`) containing complete benchmark results for all queries. You can download this artifact from the workflow run and import it into your own PostgreSQL database for analysis.
+The workflow performs **two passes** and produces two CSV artifacts for comparison:
+
+- **Pass 1** (\`pg_track_optimizer_jobench_results_pass1\`): Results **without** extra indexes
+- **Pass 2** (\`pg_track_optimizer_jobench_results_pass2\`): Results **with** extra indexes from [Extra-Indexing](Extra-Indexing) wiki page
+
+The results shown below are from **Pass 2** (with extra indexes). Both artifacts can be downloaded from the workflow run and imported into your own PostgreSQL database for comparative analysis.
 
 ### 1. Create the tracking table
 
