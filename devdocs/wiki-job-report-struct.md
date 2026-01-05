@@ -147,11 +147,13 @@ WITH
     INTERSECT SELECT queryid FROM top_wca
   )
 SELECT
-  v.queryid, LEFT(v.query, 32), ROUND(v.avg_avg, 2) as error
+  v.queryid, LEFT(v.query, 32), ROUND(v.avg_avg::numeric, 2) as error
 FROM pg_track_optimizer v
 WHERE v.queryid IN (SELECT queryid FROM intersection)
 ORDER BY error DESC;
 ```
+
+**Note**: Function ROUND needs first argument to be numeric. So, always cast this argument.
 
 ### 5. Column Description Section
 

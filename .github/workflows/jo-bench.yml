@@ -195,7 +195,7 @@ jobs:
           SELECT
             v.queryid,
             LEFT(v.query, 32) as query,
-            ROUND(v.avg_avg, 2) as error
+            ROUND(v.avg_avg::numeric, 2) as error
           FROM pg_track_optimizer v
           WHERE v.queryid IN (SELECT queryid FROM intersection)
           ORDER BY error DESC;
@@ -265,7 +265,7 @@ jobs:
           SELECT
             v.queryid,
             LEFT(v.query, 32) as query,
-            ROUND(v.avg_avg, 2) as error
+            ROUND(v.avg_avg::numeric, 2) as error
           FROM pg_track_optimizer v
           WHERE v.queryid IN (SELECT queryid FROM intersection)
           ORDER BY error DESC;
