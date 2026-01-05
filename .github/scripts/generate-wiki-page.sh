@@ -2,23 +2,29 @@
 set -e
 
 # Script to generate wiki page with JO-Bench results
-# Usage: generate-wiki-page.sh <results_file> <wiki_dir> <ext_commit> <bench_commit> <pass1_csv> <pass2_csv> <logfile>
+# Usage: generate-wiki-page.sh <pass1_results> <pass2_results> <wiki_dir> <ext_commit> <bench_commit> <pass1_csv> <pass2_csv> <logfile>
 
-RESULTS_FILE="$1"
-WIKI_DIR="$2"
-EXT_COMMIT="$3"
-BENCH_COMMIT="$4"
-PASS1_CSV="$5"
-PASS2_CSV="$6"
-LOGFILE="$7"
+PASS1_RESULTS="$1"
+PASS2_RESULTS="$2"
+WIKI_DIR="$3"
+EXT_COMMIT="$4"
+BENCH_COMMIT="$5"
+PASS1_CSV="$6"
+PASS2_CSV="$7"
+LOGFILE="$8"
 
-if [ -z "$RESULTS_FILE" ] || [ -z "$WIKI_DIR" ] || [ -z "$EXT_COMMIT" ] || [ -z "$BENCH_COMMIT" ] || [ -z "$PASS1_CSV" ] || [ -z "$PASS2_CSV" ] || [ -z "$LOGFILE" ]; then
-  echo "Usage: $0 <results_file> <wiki_dir> <ext_commit> <bench_commit> <pass1_csv> <pass2_csv> <logfile>"
+if [ -z "$PASS1_RESULTS" ] || [ -z "$PASS2_RESULTS" ] || [ -z "$WIKI_DIR" ] || [ -z "$EXT_COMMIT" ] || [ -z "$BENCH_COMMIT" ] || [ -z "$PASS1_CSV" ] || [ -z "$PASS2_CSV" ] || [ -z "$LOGFILE" ]; then
+  echo "Usage: $0 <pass1_results> <pass2_results> <wiki_dir> <ext_commit> <bench_commit> <pass1_csv> <pass2_csv> <logfile>"
   exit 1
 fi
 
-if [ ! -f "$RESULTS_FILE" ]; then
-  echo "Error: Results file not found: $RESULTS_FILE"
+if [ ! -f "$PASS1_RESULTS" ]; then
+  echo "Error: Pass 1 results file not found: $PASS1_RESULTS"
+  exit 1
+fi
+
+if [ ! -f "$PASS2_RESULTS" ]; then
+  echo "Error: Pass 2 results file not found: $PASS2_RESULTS"
   exit 1
 fi
 
@@ -29,7 +35,8 @@ PG_VERSION=$(psql -d jobench -t -c "SELECT version();" | head -1 | xargs)
 PG_COMMIT=$(cd ~/postgresql && git rev-parse HEAD)
 
 # Read benchmark results
-BENCHMARK_RESULTS=$(cat "$RESULTS_FILE")
+PASS1_BENCHMARK_RESULTS=$(cat "$PASS1_RESULTS")
+PASS2_BENCHMARK_RESULTS=$(cat "$PASS2_RESULTS")
 
 # Generate schema dynamically from pg_track_optimizer view
 SCHEMA_SQL=$(psql -d jobench -t -A -c "
@@ -122,7 +129,13 @@ cat > "$WIKI_PAGE" <<EOF
 
 ## Top Queries by Error Metrics (Pass 1 - basic Join-Order-Benchmark)
 
-TODO - the same query and report as for pass 2.
+This table shows queries that appear in the top 10 for **all** error metrics (avg_avg, rms_avg, twa_avg, and wca_avg). These are the queries with consistently poor estimation across all criteria.
+
+**Note**: These results are from **Pass 1** (without extra indexes).
+
+\`\`\`
+${PASS1_BENCHMARK_RESULTS}
+\`\`\`
 
 ## Top Queries by Error Metrics (Pass 2 - with extra indexes)
 
@@ -131,7 +144,7 @@ This table shows queries that appear in the top 10 for **all** error metrics (av
 **Note**: These results are from **Pass 2** (with extra indexes). Pass 1 results (without extra indexes) are available as a separate artifact for comparison.
 
 \`\`\`
-${BENCHMARK_RESULTS}
+${PASS2_BENCHMARK_RESULTS}
 \`\`\`
 
 ## Column Description

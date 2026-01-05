@@ -172,6 +172,35 @@ jobs:
         echo "Pass 1 results exported to CSV:"
         head -20 /tmp/pg_track_optimizer_results_pass1.csv
 
+    - name: Generate Pass 1 benchmark report
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+
+        # Execute the simplified benchmark query for Pass 1 (3 columns: queryid, query, error)
+        psql -d jobench -c "
+          WITH
+            top_avg AS (SELECT queryid FROM pg_track_optimizer ORDER BY avg_avg DESC LIMIT 10),
+            top_rms AS (SELECT queryid FROM pg_track_optimizer ORDER BY rms_avg DESC LIMIT 10),
+            top_twa AS (SELECT queryid FROM pg_track_optimizer ORDER BY twa_avg DESC LIMIT 10),
+            top_wca AS (SELECT queryid FROM pg_track_optimizer ORDER BY wca_avg DESC LIMIT 10),
+            intersection AS (
+              SELECT queryid FROM top_avg
+              INTERSECT
+              SELECT queryid FROM top_rms
+              INTERSECT
+              SELECT queryid FROM top_twa
+              INTERSECT
+              SELECT queryid FROM top_wca
+            )
+          SELECT
+            v.queryid,
+            LEFT(v.query, 32) as query,
+            ROUND(v.avg_avg, 2) as error
+          FROM pg_track_optimizer v
+          WHERE v.queryid IN (SELECT queryid FROM intersection)
+          ORDER BY error DESC;
+        " > /tmp/benchmark_results_pass1.txt
+
     - name: Apply extra indexes
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
@@ -212,6 +241,35 @@ jobs:
         psql -d jobench -c "\COPY (SELECT * FROM pg_track_optimizer ORDER BY avg_avg DESC) TO '/tmp/pg_track_optimizer_results_pass2.csv' WITH CSV HEADER"
         echo "Pass 2 results exported to CSV:"
         head -20 /tmp/pg_track_optimizer_results_pass2.csv
+
+    - name: Generate Pass 2 benchmark report
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+
+        # Execute the simplified benchmark query for Pass 2 (3 columns: queryid, query, error)
+        psql -d jobench -c "
+          WITH
+            top_avg AS (SELECT queryid FROM pg_track_optimizer ORDER BY avg_avg DESC LIMIT 10),
+            top_rms AS (SELECT queryid FROM pg_track_optimizer ORDER BY rms_avg DESC LIMIT 10),
+            top_twa AS (SELECT queryid FROM pg_track_optimizer ORDER BY twa_avg DESC LIMIT 10),
+            top_wca AS (SELECT queryid FROM pg_track_optimizer ORDER BY wca_avg DESC LIMIT 10),
+            intersection AS (
+              SELECT queryid FROM top_avg
+              INTERSECT
+              SELECT queryid FROM top_rms
+              INTERSECT
+              SELECT queryid FROM top_twa
+              INTERSECT
+              SELECT queryid FROM top_wca
+            )
+          SELECT
+            v.queryid,
+            LEFT(v.query, 32) as query,
+            ROUND(v.avg_avg, 2) as error
+          FROM pg_track_optimizer v
+          WHERE v.queryid IN (SELECT queryid FROM intersection)
+          ORDER BY error DESC;
+        " > /tmp/benchmark_results_pass2.txt
 
     - name: Show summary statistics (Pass 2 - with extra indexes)
       run: |
@@ -258,31 +316,6 @@ jobs:
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
 
-        # Execute the simplified benchmark query (3 columns: queryid, query, error)
-        psql -d jobench -c "
-          WITH
-            top_avg AS (SELECT queryid FROM pg_track_optimizer ORDER BY avg_avg DESC LIMIT 10),
-            top_rms AS (SELECT queryid FROM pg_track_optimizer ORDER BY rms_avg DESC LIMIT 10),
-            top_twa AS (SELECT queryid FROM pg_track_optimizer ORDER BY twa_avg DESC LIMIT 10),
-            top_wca AS (SELECT queryid FROM pg_track_optimizer ORDER BY wca_avg DESC LIMIT 10),
-            intersection AS (
-              SELECT queryid FROM top_avg
-              INTERSECT
-              SELECT queryid FROM top_rms
-              INTERSECT
-              SELECT queryid FROM top_twa
-              INTERSECT
-              SELECT queryid FROM top_wca
-            )
-          SELECT
-            v.queryid,
-            v.query,
-            ROUND((v.avg_avg + v.rms_avg + v.twa_avg + v.wca_avg) / 4.0, 2) as error
-          FROM pg_track_optimizer v
-          WHERE v.queryid IN (SELECT queryid FROM intersection)
-          ORDER BY error DESC;
-        " > /tmp/benchmark_results.txt
-
         # Save paths and commits before changing directories
         SCRIPT_PATH="$(pwd)/.github/scripts/generate-wiki-page.sh"
         EXT_COMMIT=$(git rev-parse HEAD)
@@ -296,11 +329,16 @@ jobs:
           exit 0
         }
 
-        # Run wiki page generation script
-        "$SCRIPT_PATH" /tmp/benchmark_results.txt ~/wiki "$EXT_COMMIT" "$BENCH_COMMIT" \
+        # Run wiki page generation script with both Pass 1 and Pass 2 results
+        "$SCRIPT_PATH" \
+          /tmp/benchmark_results_pass1.txt \
+          /tmp/benchmark_results_pass2.txt \
+          ~/wiki \
+          "$EXT_COMMIT" \
+          "$BENCH_COMMIT" \
           /tmp/pg_track_optimizer_results_pass1.csv \
           /tmp/pg_track_optimizer_results_pass2.csv \
-          ~/pgdata/logfile || {
+          ~/pgdata/logfile.log || {
           echo "Failed to generate wiki page."
           exit 0
         }
@@ -330,6 +368,6 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: postgresql_log
-        path: ~/pgdata/logfile
+        path: ~/pgdata/logfile.log
         retention-days: 7
         if-no-files-found: ignore
