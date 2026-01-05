@@ -2,14 +2,18 @@
 set -e
 
 # Script to generate wiki page with JO-Bench results
-# Usage: generate-wiki-page.sh <results_file> <wiki_dir> <ext_commit>
+# Usage: generate-wiki-page.sh <results_file> <wiki_dir> <ext_commit> <bench_commit> <pass1_csv> <pass2_csv> <logfile>
 
 RESULTS_FILE="$1"
 WIKI_DIR="$2"
 EXT_COMMIT="$3"
+BENCH_COMMIT="$4"
+PASS1_CSV="$5"
+PASS2_CSV="$6"
+LOGFILE="$7"
 
-if [ -z "$RESULTS_FILE" ] || [ -z "$WIKI_DIR" ] || [ -z "$EXT_COMMIT" ]; then
-  echo "Usage: $0 <results_file> <wiki_dir> <ext_commit>"
+if [ -z "$RESULTS_FILE" ] || [ -z "$WIKI_DIR" ] || [ -z "$EXT_COMMIT" ] || [ -z "$BENCH_COMMIT" ] || [ -z "$PASS1_CSV" ] || [ -z "$PASS2_CSV" ] || [ -z "$LOGFILE" ]; then
+  echo "Usage: $0 <results_file> <wiki_dir> <ext_commit> <bench_commit> <pass1_csv> <pass2_csv> <logfile>"
   exit 1
 fi
 
@@ -20,6 +24,7 @@ fi
 
 # Get metadata
 TEST_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+TIMESTAMP=$(date -u '+%Y-%m-%d-%H%M%S')
 PG_VERSION=$(psql -d jobench -t -c "SELECT version();" | head -1 | xargs)
 PG_COMMIT=$(cd ~/postgresql && git rev-parse HEAD)
 
@@ -57,15 +62,16 @@ cd "$WIKI_DIR"
 git config user.name "github-actions[bot]"
 git config user.email "github-actions[bot]@users.noreply.github.com"
 
-# Create wiki page filename with date
-WIKI_PAGE="JO-Bench-Results-$(date -u '+%Y-%m-%d-%H%M%S').md"
-SCHEMA_FILE="JO-Bench-Schema-$(date -u '+%Y-%m-%d-%H%M%S').sql"
+# Create artifact directory
+ARTIFACT_DIR="job-pass/${TIMESTAMP}"
+mkdir -p "${ARTIFACT_DIR}"
 
-# Create schema SQL file
-cat > "$SCHEMA_FILE" <<EOF
+# Create schema SQL file in artifact directory
+cat > "${ARTIFACT_DIR}/schema.sql" <<EOF
 -- Auto-generated schema for importing pg_track_optimizer JO-Bench results
 -- Generated on: ${TEST_DATE}
 -- Extension commit: ${EXT_COMMIT:0:7}
+-- Benchmark commit: ${BENCH_COMMIT:0:7}
 
 ${SCHEMA_SQL}
 
@@ -73,9 +79,37 @@ ${SCHEMA_SQL}
 -- \copy job_tracking_data FROM 'pg_track_optimizer_results.csv' CSV HEADER;
 EOF
 
+# Check if zip is available, if not install it
+if ! command -v zip &> /dev/null; then
+  echo "zip command not found, installing..."
+  sudo apt-get update && sudo apt-get install -y zip
+fi
+
+# Compress and copy artifacts
+if [ -f "$PASS1_CSV" ]; then
+  zip -j "${ARTIFACT_DIR}/pg_track_optimizer_jobench_results_pass1.zip" "$PASS1_CSV"
+else
+  echo "Warning: Pass 1 CSV not found: $PASS1_CSV"
+fi
+
+if [ -f "$PASS2_CSV" ]; then
+  zip -j "${ARTIFACT_DIR}/pg_track_optimizer_jobench_results_pass2.zip" "$PASS2_CSV"
+else
+  echo "Warning: Pass 2 CSV not found: $PASS2_CSV"
+fi
+
+if [ -f "$LOGFILE" ]; then
+  zip -j "${ARTIFACT_DIR}/postgresql_log.zip" "$LOGFILE"
+else
+  echo "Warning: PostgreSQL log not found: $LOGFILE"
+fi
+
+# Create wiki page with new naming convention
+WIKI_PAGE="report-${TIMESTAMP}.md"
+
 # Create wiki page content
 cat > "$WIKI_PAGE" <<EOF
-# JO-Bench Results - ${TEST_DATE}
+# Join Order Benchmark Test Results
 
 ## Test Environment
 
@@ -83,7 +117,12 @@ cat > "$WIKI_PAGE" <<EOF
 - **PostgreSQL Version**: ${PG_VERSION}
 - **PostgreSQL Commit**: [\`${PG_COMMIT:0:7}\`](https://github.com/postgres/postgres/commit/${PG_COMMIT})
 - **Extension Commit**: [\`${EXT_COMMIT:0:7}\`](https://github.com/danolivo/pg_track_optimizer/commit/${EXT_COMMIT})
-- **Test Configuration**: Two-pass testing (Pass 1: no extra indexes, Pass 2: with [extra indexes](Extra-Indexing))
+- **Test Configuration**: Two-pass testing (Pass 1: no extra indexes, Pass 2: with [extra indexes](extra_indexing))
+- **Benchmark Source**: [\`${BENCH_COMMIT:0:7}\`](https://github.com/danolivo/jo-bench/commit/${BENCH_COMMIT})
+
+## Top Queries by Error Metrics (Pass 1 - basic Join-Order-Benchmark)
+
+TODO - the same query and report as for pass 2.
 
 ## Top Queries by Error Metrics (Pass 2 - with extra indexes)
 
@@ -100,16 +139,7 @@ ${BENCHMARK_RESULTS}
 The results above include the following metrics for each query:
 - **queryid**: Internal PostgreSQL query identifier
 - **query**: The SQL query text (normalised, with literals replaced by placeholders; truncated to first 32 characters)
-- **avg_avg, avg_min, avg_max, avg_cnt, avg_dev**: Simple average of log-scale errors across plan nodes (running statistics)
-- **rms_avg, rms_min, rms_max, rms_cnt, rms_dev**: Root Mean Square error statistics (emphasises large estimation errors)
-- **twa_avg, twa_min, twa_max, twa_cnt, twa_dev**: Time-Weighted Average error statistics (highlights errors in slow nodes)
-- **wca_avg, wca_min, wca_max, wca_cnt, wca_dev**: Cost-Weighted Average error statistics (highlights errors in expensive nodes)
-- **blks_avg, blks_min, blks_max, blks_cnt, blks_dev**: Block access statistics across all executions
-- **local_avg, local_min, local_max, local_cnt, local_dev**: Local block statistics (work_mem indicator - sorts/joins spilling to disk)
-- **time_avg, time_min, time_max, time_cnt, time_dev**: Execution time statistics per query (milliseconds)
-- **jf_avg, jf_min, jf_max, jf_cnt, jf_dev**: Maximum JOIN filtered rows statistics (detects queries with inefficient join strategies)
-- **lf_avg, lf_min, lf_max, lf_cnt, lf_dev**: Maximum leaf node filtered rows statistics (detects scans fetching many rows that get filtered)
-- **nexecs**: Number of times the query was executed
+- **error**: Simple average error across plan nodes
 
 Only queries appearing in the top 10 of **every** error metric are shown, representing the most consistently problematic queries.
 
@@ -117,14 +147,16 @@ Only queries appearing in the top 10 of **every** error metric are shown, repres
 
 The workflow performs **two passes** and produces two CSV artifacts for comparison:
 
-- **Pass 1** (\`pg_track_optimizer_jobench_results_pass1\`): Results **without** extra indexes
-- **Pass 2** (\`pg_track_optimizer_jobench_results_pass2\`): Results **with** extra indexes from [Extra-Indexing](Extra-Indexing) wiki page
+- **Pass 1** (\`pg_track_optimizer_jobench_results_pass1\`): [results](${ARTIFACT_DIR}/pg_track_optimizer_jobench_results_pass1.zip) **without** extra indexes.
+- **Pass 2** (\`pg_track_optimizer_jobench_results_pass2\`): [results](${ARTIFACT_DIR}/pg_track_optimizer_jobench_results_pass2.zip) **with** extra indexes from [Extra-Indexing](extra_indexing) wiki page.
 
-The results shown below are from **Pass 2** (with extra indexes). Both artifacts can be downloaded from the workflow run and imported into your own PostgreSQL database for comparative analysis.
+Also, explore the [log file](${ARTIFACT_DIR}/postgresql_log.zip), which contains EXPLAIN ANALYZE dumps for each executed query. You can match them to a 'tracker' record by queryId, attached to each explain.
+
+Artifacts can also be downloaded from the workflow run and imported into your own PostgreSQL database for comparative analysis.
 
 ### 1. Create the tracking table
 
-The schema is auto-generated to match the current \`pg_track_optimizer\` view definition. Download the schema file: [${SCHEMA_FILE}](${SCHEMA_FILE})
+The schema is auto-generated to match the current \`pg_track_optimizer\` view definition. Download the schema file: [schema](${ARTIFACT_DIR}/schema.sql)
 
 ### 2. Import the CSV artifact
 
@@ -134,7 +166,7 @@ The schema is auto-generated to match the current \`pg_track_optimizer\` view de
 
 ### 3. Example analysis queries
 
-Find queries with highest average error:
+Find queries with the highest average error:
 \`\`\`sql
 SELECT queryid, LEFT(query, 80) as query_preview, avg_avg, rms_avg, twa_avg, wca_avg
 FROM job_tracking_data
@@ -142,7 +174,7 @@ ORDER BY avg_avg DESC
 LIMIT 10;
 \`\`\`
 
-Find queries appearing in top 10 of all error metrics (most consistently problematic):
+Find queries appearing in the top 10 of all error metrics (most consistently problematic):
 \`\`\`sql
 WITH
   top_avg AS (SELECT queryid FROM job_tracking_data ORDER BY avg_avg DESC LIMIT 10),
@@ -196,13 +228,13 @@ HOMEEOF
 fi
 
 # Commit and push to wiki repository
-git add "$WIKI_PAGE" "$SCHEMA_FILE" Home.md
-git commit -m "Add JO-Bench results for ${TEST_DATE}"
+git add "$WIKI_PAGE" "${ARTIFACT_DIR}/" Home.md
+git commit -m "Add Join Order Benchmark results for ${TEST_DATE}"
 git push origin master || {
   echo "Failed to push wiki page. This might be due to permissions."
   exit 1
 }
 
 echo "Wiki page created: $WIKI_PAGE"
-echo "Schema file created: $SCHEMA_FILE"
+echo "Artifacts directory created: ${ARTIFACT_DIR}/"
 echo "Home page updated with link to new results"
