@@ -258,7 +258,7 @@ jobs:
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
 
-        # Execute the benchmark query and save to temp file
+        # Execute the simplified benchmark query (3 columns: queryid, query, error)
         psql -d jobench -c "
           WITH
             top_avg AS (SELECT queryid FROM pg_track_optimizer ORDER BY avg_avg DESC LIMIT 10),
@@ -274,23 +274,19 @@ jobs:
               INTERSECT
               SELECT queryid FROM top_wca
             )
-          SELECT v.queryid, LEFT(v.query, 32) as query,
-                 v.avg_avg, v.avg_min, v.avg_max, v.avg_cnt, v.avg_dev,
-                 v.rms_avg, v.rms_min, v.rms_max, v.rms_cnt, v.rms_dev,
-                 v.twa_avg, v.twa_min, v.twa_max, v.twa_cnt, v.twa_dev,
-                 v.wca_avg, v.wca_min, v.wca_max, v.wca_cnt, v.wca_dev,
-                 v.blks_avg, v.blks_min, v.blks_max, v.blks_cnt, v.blks_dev,
-                 v.local_avg, v.local_min, v.local_max, v.local_cnt, v.local_dev,
-                 v.time_avg, v.time_min, v.time_max, v.time_cnt, v.time_dev,
-                 v.nexecs
+          SELECT
+            v.queryid,
+            v.query,
+            ROUND((v.avg_avg + v.rms_avg + v.twa_avg + v.wca_avg) / 4.0, 2) as error
           FROM pg_track_optimizer v
           WHERE v.queryid IN (SELECT queryid FROM intersection)
-          ORDER BY v.avg_avg DESC;
+          ORDER BY error DESC;
         " > /tmp/benchmark_results.txt
 
-        # Save script path and extension commit before changing directories
+        # Save paths and commits before changing directories
         SCRIPT_PATH="$(pwd)/.github/scripts/generate-wiki-page.sh"
         EXT_COMMIT=$(git rev-parse HEAD)
+        BENCH_COMMIT=$(cd ~/jo-bench && git rev-parse HEAD)
         chmod +x "$SCRIPT_PATH"
 
         # Clone wiki repository with authentication
@@ -301,7 +297,10 @@ jobs:
         }
 
         # Run wiki page generation script
-        "$SCRIPT_PATH" /tmp/benchmark_results.txt ~/wiki "$EXT_COMMIT" || {
+        "$SCRIPT_PATH" /tmp/benchmark_results.txt ~/wiki "$EXT_COMMIT" "$BENCH_COMMIT" \
+          /tmp/pg_track_optimizer_results_pass1.csv \
+          /tmp/pg_track_optimizer_results_pass2.csv \
+          ~/pgdata/logfile || {
           echo "Failed to generate wiki page."
           exit 0
         }
