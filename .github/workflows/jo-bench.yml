@@ -149,11 +149,11 @@ jobs:
         export PATH="$HOME/postgresql/inst/bin:$PATH"
         psql -d jobench -c "SELECT pg_track_optimizer_reset();"
 
-    - name: Execute jo-bench queries
+    - name: Execute jo-bench queries (Pass 1 - without extra indexes)
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
         cd ~/jo-bench/queries
-        echo "Executing queries..."
+        echo "Executing queries (Pass 1 - without extra indexes)..."
         for query_file in *.sql; do
           if [ -f "$query_file" ]; then
             echo "Running: $query_file"
@@ -163,18 +163,60 @@ jobs:
               echo "Query $query_file failed"
           fi
         done
-        echo "All queries executed."
+        echo "All queries executed (Pass 1)."
 
-    - name: Export pg_track_optimizer results to CSV
+    - name: Export pg_track_optimizer results to CSV (Pass 1)
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
-        psql -d jobench -c "\COPY (SELECT * FROM pg_track_optimizer ORDER BY avg_avg DESC) TO '/tmp/pg_track_optimizer_results.csv' WITH CSV HEADER"
-        echo "Results exported to CSV:"
-        head -20 /tmp/pg_track_optimizer_results.csv
+        psql -d jobench -c "\COPY (SELECT * FROM pg_track_optimizer ORDER BY avg_avg DESC) TO '/tmp/pg_track_optimizer_results_pass1.csv' WITH CSV HEADER"
+        echo "Pass 1 results exported to CSV:"
+        head -20 /tmp/pg_track_optimizer_results_pass1.csv
 
-    - name: Show summary statistics
+    - name: Apply extra indexes
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
+        echo "Applying extra indexes from wiki..."
+        psql -d jobench -f .github/scripts/extra_indexes.sql
+        echo "Extra indexes applied."
+
+    - name: Analyse tables after indexing
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        psql -d jobench -c "VACUUM ANALYZE;"
+
+    - name: Reset pg_track_optimizer statistics (before Pass 2)
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        psql -d jobench -c "SELECT pg_track_optimizer_reset();"
+        echo "Statistics reset for Pass 2."
+
+    - name: Execute jo-bench queries (Pass 2 - with extra indexes)
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        cd ~/jo-bench/queries
+        echo "Executing queries (Pass 2 - with extra indexes)..."
+        for query_file in *.sql; do
+          if [ -f "$query_file" ]; then
+            echo "Running: $query_file"
+            # Add filename comment before query and execute
+            (echo "/* $query_file */"; cat "$query_file") | \
+              psql -d jobench -v datadir="'$HOME/jo-bench'" > /dev/null 2>&1 || \
+              echo "Query $query_file failed"
+          fi
+        done
+        echo "All queries executed (Pass 2)."
+
+    - name: Export pg_track_optimizer results to CSV (Pass 2)
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        psql -d jobench -c "\COPY (SELECT * FROM pg_track_optimizer ORDER BY avg_avg DESC) TO '/tmp/pg_track_optimizer_results_pass2.csv' WITH CSV HEADER"
+        echo "Pass 2 results exported to CSV:"
+        head -20 /tmp/pg_track_optimizer_results_pass2.csv
+
+    - name: Show summary statistics (Pass 2 - with extra indexes)
+      run: |
+        export PATH="$HOME/postgresql/inst/bin:$PATH"
+        echo "=== Summary Statistics - Pass 2 (with extra indexes) ==="
         psql -d jobench -c "
           SELECT
             COUNT(*) as total_queries,
@@ -189,9 +231,10 @@ jobs:
           FROM pg_track_optimizer;
         "
 
-    - name: Show top 10 worst queries
+    - name: Show top 10 worst queries (Pass 2 - with extra indexes)
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
+        echo "=== Top 10 Worst Queries - Pass 2 (with extra indexes) ==="
         psql -d jobench -c "
           SELECT
             LEFT(query, 80) as query_preview,
@@ -269,11 +312,18 @@ jobs:
         export PATH="$HOME/postgresql/inst/bin:$PATH"
         pg_ctl -D $HOME/pgdata stop || true
 
-    - name: Upload results CSV
+    - name: Upload Pass 1 results CSV (without extra indexes)
       uses: actions/upload-artifact@v4
       with:
-        name: pg_track_optimizer_jobench_results
-        path: /tmp/pg_track_optimizer_results.csv
+        name: pg_track_optimizer_jobench_results_pass1
+        path: /tmp/pg_track_optimizer_results_pass1.csv
+        retention-days: 7
+
+    - name: Upload Pass 2 results CSV (with extra indexes)
+      uses: actions/upload-artifact@v4
+      with:
+        name: pg_track_optimizer_jobench_results_pass2
+        path: /tmp/pg_track_optimizer_results_pass2.csv
         retention-days: 7
 
     - name: Upload PostgreSQL log
