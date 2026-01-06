@@ -79,9 +79,44 @@ SELECT
 FROM pg_track_optimizer()
 WHERE query LIKE '%FROM outer_table%';
 
--- Cleanup
+/*
+ * Don't care for now about parallel query plan for now - upstream doesn't
+ * support this feature yet. But this test should fail if they implement it and
+ * we would have to fix it too.
+ */
 RESET enable_hashjoin;
 RESET enable_mergejoin;
+
+ALTER TABLE outer_table SET (parallel_workers = 4);
+ALTER TABLE inner_table SET (parallel_workers = 4);
+ALTER TABLE reference_table SET (parallel_workers = 4);
+
+SET max_parallel_workers_per_gather = 4;
+SET parallel_setup_cost = 0.0001;
+SET parallel_tuple_cost = 0.0000001;
+SET min_parallel_table_scan_size = 0;
+SET min_parallel_index_scan_size = 0;
+SET enable_material = 'off';
+
+EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF)
+SELECT o.id, o.category, o.val, i.val as inner_val
+FROM outer_table o
+JOIN inner_table i ON
+  o.id = i.id OR
+  o.val > (
+    SELECT threshold
+    FROM reference_table r
+    WHERE r.category = o.category
+  );
+
+RESET max_parallel_workers_per_gather;
+RESET parallel_setup_cost;
+RESET parallel_tuple_cost;
+RESET min_parallel_table_scan_size;
+RESET min_parallel_index_scan_size;
+RESET enable_material;
+
+-- Cleanup
 DROP TABLE outer_table, inner_table, reference_table;
 
 DROP EXTENSION pg_track_optimizer;
