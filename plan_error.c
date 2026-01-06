@@ -32,10 +32,49 @@ prediction_walker(PlanState *pstate, void *context)
 	/* At first, increment the counter */
 	ctx->counter++;
 
-	/* TODO: Identify Subplans */
+	/*
+	 * Identify and track SubPlans.
+	 *
+	 * SubPlans are correlated subqueries that execute within plan nodes.
+	 * They're not regular child nodes in the plan tree - instead they're
+	 * referenced from expression nodes (quals, targetlists, etc).
+	 *
+	 * Each SubPlan executes multiple times (once per outer row), making
+	 * their effective cost: nloops × plan_cost. We track the worst
+	 * (highest) cost factor to identify expensive correlated subqueries.
+	 */
 
 	tmp_counter = ctx->counter;
 	planstate_tree_walker(pstate, prediction_walker, context);
+
+	if (pstate->subPlan != NIL)
+	{
+		/* Node has SubPlans - analyze them to find the worst one */
+
+		foreach_node(SubPlanState, sps, pstate->subPlan)
+		{
+			Instrumentation	   *instr = sps->planstate->instrument;
+			double				nloops;
+			double				cost = sps->planstate->plan->total_cost;
+
+			Assert(instr != NULL && sps->worker_instrument == NULL);
+
+			nloops = instr->nloops;
+			if (nloops <= 0.)
+				continue;
+
+			if (nloops * cost >= ctx->worst_splan_factor || nloops * cost < 0)
+				/*
+				 * Track the maximum (worst) SubPlan cost factor.
+				 *
+				 * Note: Overflow is possible when nloops × cost exceeds double
+				 * range, resulting in negative infinity. However, such enormous
+				 * costs indicate a severe performance problem worth flagging, so
+				 * we track the negative value as evidence of the issue.
+				 */
+				ctx->worst_splan_factor = nloops * cost;
+		}
+	}
 
 	if (!pstate->instrument)
 		return false;
@@ -279,9 +318,10 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 	/* Initialize JOIN filtering statistics */
 	ctx->max_jfiltered = 0;
-
 	/* Initialize leaf node filtering statistics */
 	ctx->max_lfiltered = 0;
+	/* No subplans has been evaluated yet */
+	ctx->worst_splan_factor = 0.;
 
 	Assert(ctx->totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);

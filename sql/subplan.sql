@@ -73,6 +73,7 @@ SELECT
   ROUND((avg_error -> 'mean')::numeric, 2) AS error,
   ROUND((max_jfiltered -> 'mean')::numeric, 2) AS jf,
   ROUND((max_lfiltered -> 'mean')::numeric, 2) AS lf,
+  ROUND((worst_splan_factor -> 'mean')::numeric, 2) AS sp_factor,
   evaluated_nodes,
   plan_nodes,
   nexecs

@@ -54,6 +54,9 @@ typedef struct PlanEstimatorContext
 
 	/* Leaf node filtering statistics */
 	int64	max_lfiltered;	/* Maximum nfiltered1 for leaf nodes in the query plan */
+
+	/* SubPlan cost tracking */
+	double	worst_splan_factor;	/* Worst SubPlan cost factor (nloops × total_cost) - identifies expensive correlated subqueries */
 } PlanEstimatorContext;
 
 extern double plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx);

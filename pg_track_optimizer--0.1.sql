@@ -170,6 +170,7 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT exec_time       rstats,
 	OUT max_jfiltered   rstats,
 	OUT max_lfiltered   rstats,
+	OUT worst_splan_factor rstats,
 	OUT evaluated_nodes integer,
 	OUT plan_nodes      integer,
 	OUT nexecs          bigint
@@ -229,6 +230,11 @@ CREATE VIEW pg_track_optimizer AS SELECT
   t.max_lfiltered -> 'min' AS lf_min, t.max_lfiltered -> 'max' AS lf_max,
   t.max_lfiltered -> 'count' AS lf_cnt,
   t.max_lfiltered -> 'mean' AS lf_avg, t.max_lfiltered -> 'stddev' AS lf_dev,
+
+  /* Worst SubPlan cost factor (nloops * cost) statistics */
+  t.worst_splan_factor -> 'min' AS sp_min, t.worst_splan_factor -> 'max' AS sp_max,
+  t.worst_splan_factor -> 'count' AS sp_cnt,
+  t.worst_splan_factor -> 'mean' AS sp_avg, t.worst_splan_factor -> 'stddev' AS sp_dev,
 
   t.evaluated_nodes, t.plan_nodes, t.nexecs
 FROM pg_track_optimizer() t, pg_database d

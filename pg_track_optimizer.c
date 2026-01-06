@@ -48,7 +48,7 @@ PG_MODULE_MAGIC_EXT(
 );
 #endif
 
-#define DATATBL_NCOLS	(15)
+#define DATATBL_NCOLS	(16)
 
 typedef struct TODSMRegistry
 {
@@ -107,6 +107,7 @@ typedef struct DSMOptimizerTrackerEntry
 	RStats					exec_time;			/* Execution time per query - running stats (milliseconds) */
 	RStats					max_jfiltered;	/* Maximum filtered rows (nfiltered1+nfiltered2) across JOIN nodes */
 	RStats					max_lfiltered;	/* Maximum nfiltered1 for leaf nodes in the query plan */
+	RStats					worst_splan_factor;	/* Worst SubPlan cost factor (nloops * cost) */
 	int64					nexecs;				/* Number of executions tracked */
 
 	/* Metadata */
@@ -409,6 +410,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		rstats_set_empty(&entry->exec_time);
 		rstats_set_empty(&entry->max_jfiltered);
 		rstats_set_empty(&entry->max_lfiltered);
+		rstats_set_empty(&entry->worst_splan_factor);
 
 		entry->nexecs = 0;
 
@@ -442,6 +444,8 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	rstats_add_value(&entry->max_jfiltered, (double) ctx->max_jfiltered);
 	Assert(ctx->max_lfiltered >= 0);
 	rstats_add_value(&entry->max_lfiltered, (double) ctx->max_lfiltered);
+	Assert(ctx->worst_splan_factor >= 0.);
+	rstats_add_value(&entry->worst_splan_factor, ctx->worst_splan_factor);
 
 	/* Accumulate execution-level totals */
 	Assert(ctx->totaltime >= 0.);
@@ -612,6 +616,7 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 		values[i++] = RStatsPGetDatum(&entry->exec_time);
 		values[i++] = RStatsPGetDatum(&entry->max_jfiltered);
 		values[i++] = RStatsPGetDatum(&entry->max_lfiltered);
+		values[i++] = RStatsPGetDatum(&entry->worst_splan_factor);
 
 		values[i++] = Int32GetDatum(entry->evaluated_nodes);
 		values[i++] = Int32GetDatum(entry->plan_nodes);
@@ -1049,6 +1054,7 @@ _load_hash_table(TODSMRegistry *state)
 		memcpy(&entry->exec_time, &disk_entry.exec_time, sizeof(RStats));
 		memcpy(&entry->max_jfiltered, &disk_entry.max_jfiltered, sizeof(RStats));
 		memcpy(&entry->max_lfiltered, &disk_entry.max_lfiltered, sizeof(RStats));
+		memcpy(&entry->worst_splan_factor, &disk_entry.worst_splan_factor, sizeof(RStats));
 		entry->nexecs = disk_entry.nexecs;
 		entry->query_ptr = disk_entry.query_ptr;
 

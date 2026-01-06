@@ -151,6 +151,7 @@ LIMIT 10;
 | `exec_time` | rstats | Execution time per query in milliseconds. Tracks running statistics of execution times across query executions. |
 | `max_jfiltered` | rstats | Maximum filtered rows (nfiltered1 + nfiltered2) across all JOIN nodes per execution. Tracks running statistics across executions. High values indicate JOINs that filter many tuples, suggesting potential for optimization with parameterized NestLoop or missing indexes. |
 | `max_lfiltered` | rstats | Maximum nfiltered1 for leaf nodes (scan nodes) per execution. Tracks running statistics across executions. High values indicate many rows were fetched but filtered out at the scan level, suggesting potential for better indexes or more selective predicates. |
+| `worst_splan_factor` | rstats | Worst SubPlan cost factor (nloops × total_cost) per execution. Tracks running statistics across executions. SubPlans execute once per outer row, making their effective cost much higher than planned. High values indicate expensive correlated subqueries that may benefit from being rewritten as JOINs or lateral joins. |
 | `evaluated_nodes` | integer | Number of plan nodes analysed |
 | `plan_nodes` | integer | Total plan nodes (some may be skipped, e.g., never-executed branches) |
 | `nexecs` | bigint | Number of times the query was executed |

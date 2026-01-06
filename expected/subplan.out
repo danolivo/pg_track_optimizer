@@ -79,14 +79,15 @@ SELECT
   ROUND((avg_error -> 'mean')::numeric, 2) AS error,
   ROUND((max_jfiltered -> 'mean')::numeric, 2) AS jf,
   ROUND((max_lfiltered -> 'mean')::numeric, 2) AS lf,
+  ROUND((worst_splan_factor -> 'mean')::numeric, 2) AS sp_factor,
   evaluated_nodes,
   plan_nodes,
   nexecs
 FROM pg_track_optimizer()
 WHERE query LIKE '%FROM outer_table%';
- error |   jf   |  lf  | evaluated_nodes | plan_nodes | nexecs 
--------+--------+------+-----------------+------------+--------
-  0.34 | 266.00 | 4.00 |               5 |          5 |      1
+ error |   jf   |  lf  | sp_factor | evaluated_nodes | plan_nodes | nexecs
+-------+--------+------+-----------+-----------------+------------+--------
+  0.34 | 266.00 | 4.00 |   1900.00 |               5 |          5 |      1
 (1 row)
 
 /*
