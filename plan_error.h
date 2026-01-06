@@ -50,10 +50,10 @@ typedef struct PlanEstimatorContext
 	int64	local_blks;		/* Local blocks (read + written + dirtied) - indicates work_mem issues */
 
 	/* JOIN filtering statistics */
-	int64	max_join_filtered;	/* Maximum filtered rows (nfiltered1+nfiltered2) across all JOIN nodes */
+	int64	max_jfiltered;	/* Maximum filtered rows (nfiltered1+nfiltered2) across all JOIN nodes */
 
 	/* Leaf node filtering statistics */
-	int64	max_leaf_filtered;	/* Maximum nfiltered1 for leaf nodes in the query plan */
+	int64	max_lfiltered;	/* Maximum nfiltered1 for leaf nodes in the query plan */
 } PlanEstimatorContext;
 
 extern double plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx);

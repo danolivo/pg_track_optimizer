@@ -168,8 +168,8 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT blks_accessed   rstats,
 	OUT local_blks      rstats,
 	OUT exec_time       rstats,
-	OUT max_join_filtered rstats,
-	OUT max_leaf_filtered rstats,
+	OUT max_jfiltered   rstats,
+	OUT max_lfiltered   rstats,
 	OUT evaluated_nodes integer,
 	OUT plan_nodes      integer,
 	OUT nexecs          bigint
@@ -221,14 +221,14 @@ CREATE VIEW pg_track_optimizer AS SELECT
   t.exec_time -> 'mean' AS time_avg, t.exec_time -> 'stddev' AS time_dev,
 
   /* Maximum JOIN filtered rows statistics */
-  t.max_join_filtered -> 'min' AS jf_min, t.max_join_filtered -> 'max' AS jf_max,
-  t.max_join_filtered -> 'count' AS jf_cnt,
-  t.max_join_filtered -> 'mean' AS jf_avg, t.max_join_filtered -> 'stddev' AS jf_dev,
+  t.max_jfiltered -> 'min' AS jf_min, t.max_jfiltered -> 'max' AS jf_max,
+  t.max_jfiltered -> 'count' AS jf_cnt,
+  t.max_jfiltered -> 'mean' AS jf_avg, t.max_jfiltered -> 'stddev' AS jf_dev,
 
   /* Maximum leaf node filtered rows statistics */
-  t.max_leaf_filtered -> 'min' AS lf_min, t.max_leaf_filtered -> 'max' AS lf_max,
-  t.max_leaf_filtered -> 'count' AS lf_cnt,
-  t.max_leaf_filtered -> 'mean' AS lf_avg, t.max_leaf_filtered -> 'stddev' AS lf_dev,
+  t.max_lfiltered -> 'min' AS lf_min, t.max_lfiltered -> 'max' AS lf_max,
+  t.max_lfiltered -> 'count' AS lf_cnt,
+  t.max_lfiltered -> 'mean' AS lf_avg, t.max_lfiltered -> 'stddev' AS lf_dev,
 
   t.evaluated_nodes, t.plan_nodes, t.nexecs
 FROM pg_track_optimizer() t, pg_database d

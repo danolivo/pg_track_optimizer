@@ -13,19 +13,19 @@ SET pg_track_optimizer.mode = 'forced';
 
 -- Create test tables
 CREATE TABLE outer_table (
-    id INTEGER,
-    category INTEGER,
-    val INTEGER
+  id       INTEGER,
+  category INTEGER,
+  val      INTEGER
 );
 
 CREATE TABLE inner_table (
-    id INTEGER,
-    val INTEGER
+  id  INTEGER,
+  val INTEGER
 );
 
 CREATE TABLE reference_table (
-    category INTEGER,
-    threshold INTEGER
+  category  INTEGER,
+  threshold INTEGER
 );
 
 -- Insert data to ensure > 10 loops
@@ -41,11 +41,9 @@ FROM generate_series(1, 20) i;
 
 -- reference_table: thresholds for each category
 INSERT INTO reference_table VALUES
-(1, 50), (2, 100), (3, 150), (4, 200), (5, 250);
+  (1, 50), (2, 100), (3, 150), (4, 200), (5, 250);
 
-ANALYZE outer_table;
-ANALYZE inner_table;
-ANALYZE reference_table;
+VACUUM ANALYZE outer_table, inner_table, reference_table;
 
 -- Force nested loop to ensure the SubPlan executes multiple times
 SET enable_hashjoin = off;
@@ -55,45 +53,36 @@ SET enable_mergejoin = off;
  * This query demonstrates:
  * 1. JOIN with two-part AND condition
  * 2. Second part contains a correlated subquery (becomes SubPlan)
- * 3. SubPlan evaluates for each outer row that passes first condition
- * 4. With 20 matching rows, SubPlan loops > 10 times
+ * 3. SubPlan evaluates multiple times for each outer row that passes first
+ * condition
  */
 EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF)
 SELECT o.id, o.category, o.val, i.val as inner_val
 FROM outer_table o
 JOIN inner_table i ON
-    o.id = i.id AND  -- First part of AND: simple join condition
-    o.val > (        -- Second part of AND: correlated subquery (SubPlan)
-        SELECT threshold
-        FROM reference_table r
-        WHERE r.category = o.category
-    );
+  o.id = i.id OR
+  o.val > (
+    SELECT threshold
+    FROM reference_table r
+    WHERE r.category = o.category
+  );
 
 -- Verify the SubPlan executed multiple times
 -- The plan should show "SubPlan" with loops > 10
+-- TODO: lfiltered and jfiltered must be divided by nloops, as usual
 SELECT
-  query,
   ROUND((avg_error -> 'mean')::numeric, 2) AS error,
+  ROUND((max_jfiltered -> 'mean')::numeric, 2) AS jf,
+  ROUND((max_lfiltered -> 'mean')::numeric, 2) AS lf,
   evaluated_nodes,
   plan_nodes,
   nexecs
 FROM pg_track_optimizer()
 WHERE query LIKE '%FROM outer_table%';
 
--- Also run the query to show actual results
-SELECT o.id, o.category, o.val, i.val as inner_val
-FROM outer_table o
-JOIN inner_table i ON
-    o.id = i.id AND
-    o.val > (
-        SELECT threshold
-        FROM reference_table r
-        WHERE r.category = o.category
-    )
-ORDER BY o.id;
-
 -- Cleanup
 RESET enable_hashjoin;
 RESET enable_mergejoin;
+DROP TABLE outer_table, inner_table, reference_table;
 
 DROP EXTENSION pg_track_optimizer;

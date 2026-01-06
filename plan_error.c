@@ -32,6 +32,8 @@ prediction_walker(PlanState *pstate, void *context)
 	/* At first, increment the counter */
 	ctx->counter++;
 
+	/* TODO: Identify Subplans */
+
 	tmp_counter = ctx->counter;
 	planstate_tree_walker(pstate, prediction_walker, context);
 
@@ -210,8 +212,8 @@ prediction_walker(PlanState *pstate, void *context)
 		int64	join_filtered = pstate->instrument->nfiltered1 +
 								pstate->instrument->nfiltered2;
 
-		if (join_filtered > ctx->max_join_filtered)
-			ctx->max_join_filtered = join_filtered;
+		if (join_filtered > ctx->max_jfiltered)
+			ctx->max_jfiltered = join_filtered;
 	}
 
 	/*
@@ -224,8 +226,8 @@ prediction_walker(PlanState *pstate, void *context)
 	{
 		int64	leaf_filtered = pstate->instrument->nfiltered1;
 
-		if (leaf_filtered > ctx->max_leaf_filtered)
-			ctx->max_leaf_filtered = leaf_filtered;
+		if (leaf_filtered > ctx->max_lfiltered)
+			ctx->max_lfiltered = leaf_filtered;
 	}
 
 	ctx->nnodes++;
@@ -274,10 +276,10 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 					  queryDesc->totaltime->bufusage.local_blks_dirtied;
 
 	/* Initialize JOIN filtering statistics */
-	ctx->max_join_filtered = 0;
+	ctx->max_jfiltered = 0;
 
 	/* Initialize leaf node filtering statistics */
-	ctx->max_leaf_filtered = 0;
+	ctx->max_lfiltered = 0;
 
 	Assert(ctx->totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);
