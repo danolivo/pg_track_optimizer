@@ -69,7 +69,6 @@ JOIN inner_table i ON
 
 -- Verify the SubPlan executed multiple times
 -- The plan should show "SubPlan" with loops > 10
--- TODO: lfiltered and jfiltered must be divided by nloops, as usual
 SELECT
   ROUND((avg_error -> 'mean')::numeric, 2) AS error,
   ROUND((max_jfiltered -> 'mean')::numeric, 2) AS jf,

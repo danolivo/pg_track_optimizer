@@ -204,13 +204,14 @@ prediction_walker(PlanState *pstate, void *context)
 	 * JOIN nodes filter rows that don't match join conditions, and tracking
 	 * the maximum across all JOINs helps identify queries with inefficient
 	 * join strategies or missing indexes.
+	 * Divide by nloops to get per-loop average, as with other metrics.
 	 */
 	if (IsA(pstate->plan, NestLoop) ||
 		IsA(pstate->plan, HashJoin) ||
 		IsA(pstate->plan, MergeJoin))
 	{
-		int64	join_filtered = pstate->instrument->nfiltered1 +
-								pstate->instrument->nfiltered2;
+		int64	join_filtered = (pstate->instrument->nfiltered1 +
+								 pstate->instrument->nfiltered2) / nloops;
 
 		if (join_filtered > ctx->max_jfiltered)
 			ctx->max_jfiltered = join_filtered;
@@ -221,10 +222,11 @@ prediction_walker(PlanState *pstate, void *context)
 	 * Leaf nodes are scan nodes that directly access data sources.
 	 * High nfiltered1 values indicate many rows were fetched but filtered out,
 	 * suggesting potential for better indexes or more selective predicates.
+	 * Divide by nloops to get per-loop average, as with other metrics.
 	 */
 	if (tmp_counter == ctx->counter)
 	{
-		int64	leaf_filtered = pstate->instrument->nfiltered1;
+		int64	leaf_filtered = pstate->instrument->nfiltered1 / nloops;
 
 		if (leaf_filtered > ctx->max_lfiltered)
 			ctx->max_lfiltered = leaf_filtered;

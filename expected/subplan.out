@@ -75,7 +75,6 @@ JOIN inner_table i ON
 
 -- Verify the SubPlan executed multiple times
 -- The plan should show "SubPlan" with loops > 10
--- TODO: lfiltered and jfiltered must be divided by nloops, as usual
 SELECT
   ROUND((avg_error -> 'mean')::numeric, 2) AS error,
   ROUND((max_jfiltered -> 'mean')::numeric, 2) AS jf,
@@ -85,9 +84,9 @@ SELECT
   nexecs
 FROM pg_track_optimizer()
 WHERE query LIKE '%FROM outer_table%';
- error |   jf   |   lf    | evaluated_nodes | plan_nodes | nexecs 
--------+--------+---------+-----------------+------------+--------
-  0.34 | 266.00 | 1520.00 |               5 |          5 |      1
+ error |   jf   | lf  | evaluated_nodes | plan_nodes | nexecs
+-------+--------+-----+-----------------+------------+--------
+  0.34 | 266.00 | 4.00 |               5 |          5 |      1
 (1 row)
 
 -- Cleanup
