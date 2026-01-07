@@ -62,9 +62,13 @@ typedef struct PlanEstimatorContext
 	 * They're not regular child nodes in the plan tree - instead they're
 	 * referenced from expression nodes (quals, targetlists, etc).
 	 *
-	 * Each SubPlan executes multiple times (once per outer row), making
-	 * their effective cost: nloops × plan_cost. We track the worst
-	 * (highest) cost factor to identify expensive correlated subqueries.
+	 * Each SubPlan executes multiple times (once per outer row). We track
+	 * a dimensionless factor that indicates optimization potential:
+	 *   sp_factor = (nloops / log(nloops + 1)) * (subplan_time / query_time)
+	 *
+	 * This factor can be compared across different queries to identify the
+	 * most promising optimization candidates (highest values = best targets
+	 * for JOIN conversion).
 	 */
 	double	worst_splan_factor;
 } PlanEstimatorContext;

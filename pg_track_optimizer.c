@@ -107,7 +107,7 @@ typedef struct DSMOptimizerTrackerEntry
 	RStats					exec_time;			/* Execution time per query - running stats (milliseconds) */
 	RStats					max_jfiltered;	/* Maximum filtered rows (nfiltered1+nfiltered2) across JOIN nodes */
 	RStats					max_lfiltered;	/* Maximum nfiltered1 for leaf nodes in the query plan */
-	RStats					worst_splan_factor;	/* Worst SubPlan cost factor (nloops * cost) */
+	RStats					worst_splan_factor;	/* Worst SubPlan factor: (nloops/log(nloops+1)) * (time/total_time) */
 	int64					nexecs;				/* Number of executions tracked */
 
 	/* Metadata */

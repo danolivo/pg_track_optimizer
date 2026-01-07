@@ -99,3 +99,50 @@ sp_factor = base_factor * time_weight * (1 + error_penalty);
 
 - **Option 3** (nloops × time_ratio): Best for immediate problem identification in production
 - **Option 4** (hybrid): Best for comprehensive analysis and predictive optimization
+
+**Andrei's opinion**: cost value in the factor looks inconvenient because makes this parameter dimensional. We want to compare potential inefficiency of very different queries: one query may be executed in an hour and optimised to be executed in 30 minutes. On the other side, a query, executed in 100ms may be optimised to be executed in 1ms. What is more profitable?
+
+---
+
+## Option 9: Logarithmically Dampened Loop Factor
+
+```c
+sp_factor = (subplan_nloops / log(subplan_nloops + 1)) * (subplan_exectime / query_exectime);
+```
+
+**Rationale:**
+
+This formula addresses a key insight: the optimization value doesn't grow linearly with loop count. Converting a 10,000-loop subplan to 1 loop isn't necessarily 10× more valuable than converting a 1,000-loop subplan to 1 loop - much of the benefit is captured in the first 90% reduction.
+
+**Growth Characteristics:**
+
+| Loops | Linear Growth (Option 3) | Logarithmic Growth (Option 9) |
+|-------|-------------------------|-------------------------------|
+| 10    | 10                      | ~4.2                          |
+| 100   | 100                     | ~21.7                         |
+| 1,000 | 1,000                   | ~145                          |
+| 10,000| 10,000                  | ~1,087                        |
+
+The `nloops / log(nloops + 1)` term creates super-linear but sub-quadratic growth:
+- **Small loop counts (10)**: Minimal penalty (~4×) - probably not worth complex rewrites
+- **Moderate loop counts (100)**: Noticeable factor (~22×) - starting to be interesting
+- **High loop counts (1,000)**: Strong signal (~145×) - clear optimization candidate
+- **Extreme loop counts (10,000)**: Critical issue (~1,087×) but not explosive
+
+**Advantages:**
+
+1. **Dimensionless**: Like Option 3, this remains a pure ratio comparable across all queries regardless of absolute execution time
+2. **Natural thresholding**: Automatically de-prioritizes trivial cases (few loops) while emphasizing truly problematic ones
+3. **Non-explosive growth**: Unlike quadratic penalties, this won't produce misleadingly huge numbers for extreme cases
+4. **Reflects optimization reality**: The marginal value of eliminating additional loops decreases as you eliminate more
+
+**Disadvantages:**
+
+1. **Less intuitive**: The logarithmic dampening makes the factor harder to interpret directly
+2. **More complex computation**: Requires logarithm calculation vs simple multiplication
+3. **May under-emphasize extreme cases**: A 10,000-loop subplan might deserve more attention than the ~1,087 factor suggests
+
+**When to Use:**
+
+- Use Option 9 when you want to naturally balance between trivial and extreme cases
+- Use Option 3 when you prefer simplicity and direct proportionality to loop count

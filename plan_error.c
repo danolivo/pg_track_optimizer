@@ -13,20 +13,12 @@
 
 #include "postgres.h"
 
+#include <math.h>
+
 #include "nodes/execnodes.h"
 #include "optimizer/optimizer.h"
 
 #include "plan_error.h"
-
-/*
- * Scale factor for SubPlan cost calculations to prevent overflow.
- *
- * When calculating SubPlan cost factor (nloops × cost), both operands can be
- * extremely large, potentially causing double overflow. We scale both values
- * down by this factor before multiplication, trading some precision for the
- * ability to track pathologically expensive SubPlans.
- */
-#define SPLAN_FACTOR_BASE	(1000.)
 
 static bool
 prediction_walker(PlanState *pstate, void *context)
@@ -51,38 +43,53 @@ prediction_walker(PlanState *pstate, void *context)
 		 * Analyze SubPlans to find the worst cost factor.
 		 *
 		 * SubPlans are correlated subqueries that execute multiple times
-		 * (once per outer row), making their effective cost: nloops × cost.
-		 * We scale both values down to prevent overflow when multiplying.
+		 * (once per outer row). We calculate a dimensionless factor that
+		 * indicates optimization potential using:
+		 *   sp_factor = (nloops / log(nloops + 1)) * (subplan_time / query_time)
+		 *
+		 * The logarithmic dampening reflects that optimization value doesn't
+		 * grow linearly with loops - converting 10K loops to 1 isn't 10× more
+		 * valuable than converting 1K loops to 1.
 		 */
 		foreach_node(SubPlanState, sps, pstate->subPlan)
 		{
 			Instrumentation	   *instr = sps->planstate->instrument;
-			double				scaled_nloops;
-			double				scaled_cost;
+			double				nloops;
+			double				subplan_time;
+			double				time_ratio;
+			double				loop_factor;
 			double				cost_factor;
 
 			Assert(instr != NULL && sps->planstate->worker_instrument == NULL);
 
-			/*
-			 * Scale down both nloops and cost by SPLAN_FACTOR_BASE to prevent
-			 * overflow. This sacrifices some precision but allows us to track
-			 * extremely expensive subplans that would otherwise overflow.
-			 */
-			scaled_nloops = instr->nloops / SPLAN_FACTOR_BASE;
-			scaled_cost = sps->planstate->plan->total_cost / SPLAN_FACTOR_BASE;
-
-			if (instr->nloops <= 0.)
+			if (instr->nloops <= 0. || ctx->totaltime <= 0.)
 				continue;
 
-			cost_factor = scaled_nloops / scaled_cost;
+			nloops = instr->nloops;
+			subplan_time = instr->total;
+			time_ratio = subplan_time / ctx->totaltime;
+
+			/*
+			 * Calculate logarithmically dampened loop factor.
+			 * This creates super-linear but sub-quadratic growth:
+			 *   10 loops → ~4.2×
+			 *   100 loops → ~21.7×
+			 *   1,000 loops → ~145×
+			 *   10,000 loops → ~1,087×
+			 */
+			loop_factor = nloops / log(nloops + 1.);
+
+			/*
+			 * Final factor is dimensionless: loop_factor × time_ratio
+			 * This can be compared across different queries to identify
+			 * the most promising optimization candidates.
+			 */
+			cost_factor = loop_factor * time_ratio;
 
 			/*
 			 * Track the maximum (worst) SubPlan cost factor.
-			 *
-			 * Note: Overflow is still possible if the product exceeds double
-			 * range, resulting in infinity. We check for this (negative after
-			 * overflow to negative infinity) as such enormous costs indicate
-			 * severe performance problems worth flagging.
+			 * Higher values indicate subplans that consume significant time
+			 * and execute many loops - prime candidates for JOIN conversion.
 			 */
 			if (cost_factor >= ctx->worst_splan_factor || cost_factor < 0)
 				ctx->worst_splan_factor = cost_factor;
