@@ -55,8 +55,18 @@ typedef struct PlanEstimatorContext
 	/* Leaf node filtering statistics */
 	int64	max_lfiltered;	/* Maximum nfiltered1 for leaf nodes in the query plan */
 
-	/* SubPlan cost tracking */
-	double	worst_splan_factor;	/* Worst SubPlan cost factor (nloops × total_cost) - identifies expensive correlated subqueries */
+	/*
+	 * Identify and track SubPlans.
+	 *
+	 * SubPlans are correlated subqueries that execute within plan nodes.
+	 * They're not regular child nodes in the plan tree - instead they're
+	 * referenced from expression nodes (quals, targetlists, etc).
+	 *
+	 * Each SubPlan executes multiple times (once per outer row), making
+	 * their effective cost: nloops × plan_cost. We track the worst
+	 * (highest) cost factor to identify expensive correlated subqueries.
+	 */
+	double	worst_splan_factor;
 } PlanEstimatorContext;
 
 extern double plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx);

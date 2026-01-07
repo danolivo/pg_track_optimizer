@@ -18,6 +18,16 @@
 
 #include "plan_error.h"
 
+/*
+ * Scale factor for SubPlan cost calculations to prevent overflow.
+ *
+ * When calculating SubPlan cost factor (nloops × cost), both operands can be
+ * extremely large, potentially causing double overflow. We scale both values
+ * down by this factor before multiplication, trading some precision for the
+ * ability to track pathologically expensive SubPlans.
+ */
+#define SPLAN_FACTOR_BASE	(1000.)
+
 static bool
 prediction_walker(PlanState *pstate, void *context)
 {
@@ -32,47 +42,50 @@ prediction_walker(PlanState *pstate, void *context)
 	/* At first, increment the counter */
 	ctx->counter++;
 
-	/*
-	 * Identify and track SubPlans.
-	 *
-	 * SubPlans are correlated subqueries that execute within plan nodes.
-	 * They're not regular child nodes in the plan tree - instead they're
-	 * referenced from expression nodes (quals, targetlists, etc).
-	 *
-	 * Each SubPlan executes multiple times (once per outer row), making
-	 * their effective cost: nloops × plan_cost. We track the worst
-	 * (highest) cost factor to identify expensive correlated subqueries.
-	 */
-
 	tmp_counter = ctx->counter;
 	planstate_tree_walker(pstate, prediction_walker, context);
 
 	if (pstate->subPlan != NIL)
 	{
-		/* Node has SubPlans - analyze them to find the worst one */
-
+		/*
+		 * Analyze SubPlans to find the worst cost factor.
+		 *
+		 * SubPlans are correlated subqueries that execute multiple times
+		 * (once per outer row), making their effective cost: nloops × cost.
+		 * We scale both values down to prevent overflow when multiplying.
+		 */
 		foreach_node(SubPlanState, sps, pstate->subPlan)
 		{
 			Instrumentation	   *instr = sps->planstate->instrument;
-			double				nloops;
-			double				cost = sps->planstate->plan->total_cost;
+			double				scaled_nloops;
+			double				scaled_cost;
+			double				cost_factor;
 
-			Assert(instr != NULL && sps->worker_instrument == NULL);
+			Assert(instr != NULL && sps->planstate->worker_instrument == NULL);
 
-			nloops = instr->nloops;
-			if (nloops <= 0.)
+			/*
+			 * Scale down both nloops and cost by SPLAN_FACTOR_BASE to prevent
+			 * overflow. This sacrifices some precision but allows us to track
+			 * extremely expensive subplans that would otherwise overflow.
+			 */
+			scaled_nloops = instr->nloops / SPLAN_FACTOR_BASE;
+			scaled_cost = sps->planstate->plan->total_cost / SPLAN_FACTOR_BASE;
+
+			if (instr->nloops <= 0.)
 				continue;
 
-			if (nloops * cost >= ctx->worst_splan_factor || nloops * cost < 0)
-				/*
-				 * Track the maximum (worst) SubPlan cost factor.
-				 *
-				 * Note: Overflow is possible when nloops × cost exceeds double
-				 * range, resulting in negative infinity. However, such enormous
-				 * costs indicate a severe performance problem worth flagging, so
-				 * we track the negative value as evidence of the issue.
-				 */
-				ctx->worst_splan_factor = nloops * cost;
+			cost_factor = scaled_nloops / scaled_cost;
+
+			/*
+			 * Track the maximum (worst) SubPlan cost factor.
+			 *
+			 * Note: Overflow is still possible if the product exceeds double
+			 * range, resulting in infinity. We check for this (negative after
+			 * overflow to negative infinity) as such enormous costs indicate
+			 * severe performance problems worth flagging.
+			 */
+			if (cost_factor >= ctx->worst_splan_factor || cost_factor < 0)
+				ctx->worst_splan_factor = cost_factor;
 		}
 	}
 
@@ -249,8 +262,8 @@ prediction_walker(PlanState *pstate, void *context)
 		IsA(pstate->plan, HashJoin) ||
 		IsA(pstate->plan, MergeJoin))
 	{
-		int64	join_filtered = (pstate->instrument->nfiltered1 +
-								 pstate->instrument->nfiltered2) / nloops;
+		int64	join_filtered = (int64) ((pstate->instrument->nfiltered1 +
+								 pstate->instrument->nfiltered2) / nloops);
 
 		if (join_filtered > ctx->max_jfiltered)
 			ctx->max_jfiltered = join_filtered;
@@ -265,7 +278,7 @@ prediction_walker(PlanState *pstate, void *context)
 	 */
 	if (tmp_counter == ctx->counter)
 	{
-		int64	leaf_filtered = pstate->instrument->nfiltered1 / nloops;
+		int64	leaf_filtered = (int64) (pstate->instrument->nfiltered1 / nloops);
 
 		if (leaf_filtered > ctx->max_lfiltered)
 			ctx->max_lfiltered = leaf_filtered;
