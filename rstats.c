@@ -32,12 +32,6 @@ PG_FUNCTION_INFO_V1(rstats_init_int4);
 PG_FUNCTION_INFO_V1(rstats_init_numeric);
 
 PG_FUNCTION_INFO_V1(rstats_add);
-PG_FUNCTION_INFO_V1(rstats_get_count);
-PG_FUNCTION_INFO_V1(rstats_get_mean);
-PG_FUNCTION_INFO_V1(rstats_get_variance);
-PG_FUNCTION_INFO_V1(rstats_get_stddev);
-PG_FUNCTION_INFO_V1(rstats_get_min);
-PG_FUNCTION_INFO_V1(rstats_get_max);
 PG_FUNCTION_INFO_V1(rstats_eq);
 PG_FUNCTION_INFO_V1(rstats_get_field);
 
@@ -190,7 +184,6 @@ get_double_value(Datum inputval, Oid argtype)
 		/* Convert to your target type, e.g., float8 */
 		value = DirectFunctionCall1(float8in, CStringGetDatum(str));
 		result = DatumGetFloat8(value);
-		argtype = FLOAT8OID;
 	}
 		break;
 	default:
@@ -322,21 +315,14 @@ rstats_init_int4(PG_FUNCTION_ARGS)
 Datum
 rstats_init_numeric(PG_FUNCTION_ARGS)
 {
-	Numeric		num = PG_GETARG_NUMERIC(0);
-	char	   *tmp;
-	Datum		float_value;
-	double		value;
+	Datum	num = PG_GETARG_DATUM(0);
+	Datum	float_value;
 	RStats *result;
 
-	/* Convert numeric to double */
-	tmp = DatumGetCString(DirectFunctionCall1(numeric_out,
-											  NumericGetDatum(num)));
-	float_value = DirectFunctionCall1(float8in, CStringGetDatum(tmp));
-	pfree(tmp);
-	value = DatumGetFloat8(float_value);
+	float_value = DirectFunctionCall1(numeric_float8, num);
 
 	result = (RStats *) palloc(sizeof(RStats));
-	rstats_init_internal(result, value);
+	rstats_init_internal(result, DatumGetFloat8(float_value));
 
 	PG_RETURN_RSTATS_P(result);
 }
@@ -431,72 +417,13 @@ rstats_is_empty(RStats *value)
 }
 
 /*
- * Accessor functions to get individual statistics
- */
-
-Datum
-rstats_get_count(PG_FUNCTION_ARGS)
-{
-	RStats *stats = PG_GETARG_RSTATS_P(0);
-	PG_RETURN_INT64(stats->count);
-}
-
-Datum
-rstats_get_mean(PG_FUNCTION_ARGS)
-{
-	RStats *stats = PG_GETARG_RSTATS_P(0);
-	PG_RETURN_FLOAT8(stats->mean);
-}
-
-Datum
-rstats_get_variance(PG_FUNCTION_ARGS)
-{
-	RStats *stats = PG_GETARG_RSTATS_P(0);
-	double	variance;
-
-	if (stats->count > 1)
-		variance = stats->m2 / (stats->count - 1);
-	else
-		variance = 0.0;
-
-	PG_RETURN_FLOAT8(variance);
-}
-
-Datum
-rstats_get_stddev(PG_FUNCTION_ARGS)
-{
-	RStats *stats = PG_GETARG_RSTATS_P(0);
-	double	variance, stddev;
-
-	if (stats->count > 1)
-	{
-		variance = stats->m2 / (stats->count - 1);
-		stddev = sqrt(variance);
-	}
-	else
-		stddev = 0.0;
-
-	PG_RETURN_FLOAT8(stddev);
-}
-
-Datum
-rstats_get_min(PG_FUNCTION_ARGS)
-{
-	RStats *stats = PG_GETARG_RSTATS_P(0);
-	PG_RETURN_FLOAT8(stats->min);
-}
-
-Datum
-rstats_get_max(PG_FUNCTION_ARGS)
-{
-	RStats *stats = PG_GETARG_RSTATS_P(0);
-	PG_RETURN_FLOAT8(stats->max);
-}
-
-/*
 
  * Equality comparison for statistics type
- * Two statistics objects are equal if all their fields match
+ * Two statistics objects are equal if all their fields match.
+ *
+ * NOTE:
+ * Use direct (not an epsilon match) because the sematics og this operator is
+ * that is exactly the same data - same values were coming in the same order.
  */
 Datum
 rstats_eq(PG_FUNCTION_ARGS)
