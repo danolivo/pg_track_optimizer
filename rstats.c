@@ -65,6 +65,8 @@ rstats_in(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("count must be non-negative")));
 
+	Assert(variance >= 0. && min_val <= max_val);
+
 	/* Allocate and initialize the result */
 	result = (RStats *) palloc(sizeof(RStats));
 
@@ -146,7 +148,8 @@ rstats_send(PG_FUNCTION_ARGS)
 /*
  * Set RStats to an empty (uninitialized) state.
  * We use -1 as a sentinel value for all fields except count because:
- * 1. It's an invalid value for statistics (negative values shouldn't occur)
+ * 1. We want to have meaningful serialised representation and control if
+ * something happened in serialise/deserialise chain.
  * 2. It allows rstats_is_empty() to verify structural integrity
  * 3. It helps detect use of uninitialized/corrupted memory
  */
@@ -315,8 +318,8 @@ rstats_init_int4(PG_FUNCTION_ARGS)
 Datum
 rstats_init_numeric(PG_FUNCTION_ARGS)
 {
-	Datum	num = PG_GETARG_DATUM(0);
-	Datum	float_value;
+	Datum		num = PG_GETARG_DATUM(0);
+	Datum		float_value;
 	RStats *result;
 
 	float_value = DirectFunctionCall1(numeric_float8, num);
@@ -395,7 +398,7 @@ rstats_add(PG_FUNCTION_ARGS)
 /*
  * Utility function to check if running statistics value is empty.
  * Also verifies the sentinel values to ensure the structure hasn't been
- * corrupted or used after being freed.
+ * corrupted or used after being freed (or after serialization/deserialization).
  */
 bool
 rstats_is_empty(RStats *value)
@@ -422,7 +425,7 @@ rstats_is_empty(RStats *value)
  * Two statistics objects are equal if all their fields match.
  *
  * NOTE:
- * Use direct (not an epsilon match) because the sematics og this operator is
+ * Use direct (not an epsilon match) because the sematics of this operator is
  * that is exactly the same data - same values were coming in the same order.
  */
 Datum
