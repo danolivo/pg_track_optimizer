@@ -47,8 +47,8 @@ jobs:
       run: |
         cd ~/postgresql
         ./configure --prefix=$HOME/postgresql/inst --enable-debug --enable-cassert --enable-depend
-        make -j$(nproc)
-        make install
+        make -j$(nproc) && make -C contrib -j$(nproc)
+        make install && make -C contrib install
 
     - name: Add PostgreSQL to PATH
       run: |

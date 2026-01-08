@@ -4,7 +4,6 @@
 -- These indexes are applied in the second pass of JO-Bench testing
 -- to measure the impact of indexing on cardinality estimation errors.
 
-CREATE INDEX aka_name_idx_1 ON aka_name (info);
 CREATE INDEX aka_name_idx_2 ON aka_name (name);
 CREATE INDEX movie_info_idx_idx_1 ON movie_info_idx (info);
 CREATE INDEX title_idx_1 ON title (production_year);
