@@ -281,9 +281,7 @@ prediction_walker(PlanState *pstate, void *context)
 								 pstate->instrument->nfiltered2) / nloops);
 
 		if (jf_factor > 0.)
-		{
 			jf_factor /= real_rows;
-		}
 
 		if (jf_factor > ctx->max_jf_factor)
 			ctx->max_jf_factor = jf_factor;
@@ -298,10 +296,13 @@ prediction_walker(PlanState *pstate, void *context)
 	 */
 	if (tmp_counter == ctx->counter)
 	{
-		int64	leaf_filtered = (int64) (pstate->instrument->nfiltered1 / nloops);
+		double	lf_factor = (pstate->instrument->nfiltered1 / nloops);
 
-		if (leaf_filtered > ctx->max_lf_factor)
-			ctx->max_lf_factor = leaf_filtered;
+		if (lf_factor > 0.)
+			lf_factor /= real_rows;
+
+		if (lf_factor > ctx->max_lf_factor)
+			ctx->max_lf_factor = lf_factor;
 	}
 
 	ctx->nnodes++;
