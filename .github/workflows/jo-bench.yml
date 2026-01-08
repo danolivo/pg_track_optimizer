@@ -103,6 +103,7 @@ jobs:
         min_parallel_index_scan_size = 0
         parallel_setup_cost = 0.01
         parallel_tuple_cost = 0.0001
+        default_statistics_target = 2500
         EOF
 
     - name: Start PostgreSQL
