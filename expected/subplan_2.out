@@ -64,11 +64,11 @@ JOIN inner_table i ON
                              QUERY PLAN                             
 --------------------------------------------------------------------
  Nested Loop (actual rows=134.00 loops=1)
-   Join Filter: ((o.id = i.id) OR (o.val > (SubPlan expr_1)))
+   Join Filter: ((o.id = i.id) OR (o.val > (SubPlan 1)))
    Rows Removed by Join Filter: 266
    ->  Seq Scan on outer_table o (actual rows=20.00 loops=1)
    ->  Seq Scan on inner_table i (actual rows=20.00 loops=20)
-   SubPlan expr_1
+   SubPlan 1
      ->  Seq Scan on reference_table r (actual rows=1.00 loops=380)
            Filter: (category = o.category)
            Rows Removed by Filter: 4
@@ -86,9 +86,9 @@ SELECT
   nexecs
 FROM pg_track_optimizer()
 WHERE query LIKE '%FROM outer_table%';
- error |   jf   |  lf  | spf_non_zero | evaluated_nodes | plan_nodes | nexecs 
--------+--------+------+--------------+-----------------+------------+--------
-  0.43 | 266.00 | 4.00 | t            |               4 |          4 |      1
+ error |  jf  |  lf  | spf_non_zero | evaluated_nodes | plan_nodes | nexecs 
+-------+------+------+--------------+-----------------+------------+--------
+  0.43 | 1.99 | 4.00 | t            |               4 |          4 |      1
 (1 row)
 
 /*
@@ -119,14 +119,14 @@ JOIN inner_table i ON
                                  QUERY PLAN                                  
 -----------------------------------------------------------------------------
  Nested Loop (actual rows=134.00 loops=1)
-   Join Filter: ((o.id = i.id) OR (o.val > (SubPlan expr_1)))
+   Join Filter: ((o.id = i.id) OR (o.val > (SubPlan 1)))
    Rows Removed by Join Filter: 266
    ->  Seq Scan on outer_table o (actual rows=20.00 loops=1)
    ->  Gather (actual rows=20.00 loops=20)
          Workers Planned: 4
          Workers Launched: 4
          ->  Parallel Seq Scan on inner_table i (actual rows=4.00 loops=100)
-   SubPlan expr_1
+   SubPlan 1
      ->  Seq Scan on reference_table r (actual rows=1.00 loops=380)
            Filter: (category = o.category)
            Rows Removed by Filter: 4

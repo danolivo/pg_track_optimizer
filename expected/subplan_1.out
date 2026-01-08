@@ -86,9 +86,9 @@ SELECT
   nexecs
 FROM pg_track_optimizer()
 WHERE query LIKE '%FROM outer_table%';
- error |   jf   |  lf  | spf_non_zero | evaluated_nodes | plan_nodes | nexecs 
--------+--------+------+--------------+-----------------+------------+--------
-  0.43 | 266.00 | 4.00 | t            |               4 |          4 |      1
+ error |  jf  |  lf  | spf_non_zero | evaluated_nodes | plan_nodes | nexecs 
+-------+------+------+--------------+-----------------+------------+--------
+  0.43 | 1.99 | 4.00 | t            |               4 |          4 |      1
 (1 row)
 
 /*

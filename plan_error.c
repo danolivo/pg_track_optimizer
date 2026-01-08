@@ -233,7 +233,15 @@ prediction_walker(PlanState *pstate, void *context)
 	}
 
 	plan_rows = clamp_row_est(plan_rows);
-	real_rows = clamp_row_est(real_rows);
+
+	/*
+	 * For parameterised subplans it is typical when real_rows less than 1.
+	 * If all rows were filtered, assume there were only 1 tuple across all the
+	 * loops. It shouldn't be huge overestimation unless single iteration of
+	 * this subtree costs a lot.
+	 */
+	if (real_rows <= 0)
+		real_rows = 1. / pstate->instrument->nloops;
 
 	/*
 	 * Now, we can calculate the value of the relative estimation error made
@@ -269,11 +277,16 @@ prediction_walker(PlanState *pstate, void *context)
 		IsA(pstate->plan, HashJoin) ||
 		IsA(pstate->plan, MergeJoin))
 	{
-		int64	join_filtered = (int64) ((pstate->instrument->nfiltered1 +
+		double jf_factor = ((pstate->instrument->nfiltered1 +
 								 pstate->instrument->nfiltered2) / nloops);
 
-		if (join_filtered > ctx->max_jfiltered)
-			ctx->max_jfiltered = join_filtered;
+		if (jf_factor > 0.)
+		{
+			jf_factor /= real_rows;
+		}
+
+		if (jf_factor > ctx->max_jf_factor)
+			ctx->max_jf_factor = jf_factor;
 	}
 
 	/*
@@ -287,8 +300,8 @@ prediction_walker(PlanState *pstate, void *context)
 	{
 		int64	leaf_filtered = (int64) (pstate->instrument->nfiltered1 / nloops);
 
-		if (leaf_filtered > ctx->max_lfiltered)
-			ctx->max_lfiltered = leaf_filtered;
+		if (leaf_filtered > ctx->max_lf_factor)
+			ctx->max_lf_factor = leaf_filtered;
 	}
 
 	ctx->nnodes++;
@@ -337,9 +350,9 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 					  queryDesc->totaltime->bufusage.local_blks_dirtied;
 
 	/* Initialize JOIN filtering statistics */
-	ctx->max_jfiltered = 0;
+	ctx->max_jf_factor = 0.;
 	/* Initialize leaf node filtering statistics */
-	ctx->max_lfiltered = 0;
+	ctx->max_lf_factor = 0.;
 	/* No subplans has been evaluated yet */
 	ctx->worst_splan_factor = 0.;
 
