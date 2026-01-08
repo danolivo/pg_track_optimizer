@@ -39,8 +39,31 @@ PASS1_BENCHMARK_RESULTS=$(cat "$PASS1_RESULTS")
 PASS2_BENCHMARK_RESULTS=$(cat "$PASS2_RESULTS")
 
 # Generate schema dynamically from pg_track_optimizer view
-SCHEMA_SQL=$(psql -d jobench -t -A -c "
-  SELECT 'CREATE TABLE job_tracking_data (' || E'\n' ||
+SCHEMA_SQL1=$(psql -d jobench -t -A -c "
+  SELECT 'CREATE TABLE job_tracking_data_pass1 (' || E'\n' ||
+         string_agg('  ' || column_name || ' ' ||
+                    CASE
+                      WHEN data_type = 'USER-DEFINED' THEN 'double precision'
+                      WHEN data_type = 'character varying' THEN 'text'
+                      ELSE data_type
+                    END ||
+                    CASE WHEN column_name != last_col THEN ',' ELSE '' END,
+                    E'\n' ORDER BY ordinal_position) ||
+         E'\n' || ');'
+  FROM (
+    SELECT
+      column_name,
+      data_type,
+      ordinal_position,
+      LAST_VALUE(column_name) OVER (ORDER BY ordinal_position ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_col
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'pg_track_optimizer'
+  ) cols;
+")
+
+SCHEMA_SQL2=$(psql -d jobench -t -A -c "
+  SELECT 'CREATE TABLE job_tracking_data_pass2 (' || E'\n' ||
          string_agg('  ' || column_name || ' ' ||
                     CASE
                       WHEN data_type = 'USER-DEFINED' THEN 'double precision'
@@ -80,10 +103,12 @@ cat > "${ARTIFACT_DIR}/schema.sql" <<EOF
 -- Extension commit: ${EXT_COMMIT:0:7}
 -- Benchmark commit: ${BENCH_COMMIT:0:7}
 
-${SCHEMA_SQL}
+${SCHEMA_SQL1}
+${SCHEMA_SQL2}
 
 -- Import command:
--- \copy job_tracking_data FROM 'pg_track_optimizer_results.csv' CSV HEADER;
+\copy job_tracking_data_pass1 FROM 'pg_track_optimizer_results_pass1.csv' CSV HEADER;
+\copy job_tracking_data_pass2 FROM 'pg_track_optimizer_results_pass2.csv' CSV HEADER;
 EOF
 
 # Check if zip is available, if not install it
@@ -170,7 +195,7 @@ Artifacts can also be downloaded from the workflow run and imported into your ow
 
 ### 1. Create the tracking table
 
-The schema is auto-generated to match the current \`pg_track_optimizer\` view definition. Download the schema file: [schema](${ARTIFACT_DIR}/schema.sql)
+The schema is auto-generated to match the current \`pg_track_optimizer\` view definition. Download the schema file: [schema.sql](${ARTIFACT_DIR}/schema.sql)
 
 ### 2. Import the CSV artifact
 
