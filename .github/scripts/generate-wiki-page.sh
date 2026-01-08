@@ -108,7 +108,8 @@ fi
 if [ -f "$LOGFILE" ]; then
   zip -j "${ARTIFACT_DIR}/postgresql_log.zip" "$LOGFILE"
 else
-  echo "Warning: PostgreSQL log not found: $LOGFILE"
+  echo "Error: PostgreSQL log not found: $LOGFILE"
+  exit 1
 fi
 
 # Create wiki page with new naming convention

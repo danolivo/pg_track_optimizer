@@ -108,7 +108,7 @@ jobs:
     - name: Start PostgreSQL
       run: |
         export PATH="$HOME/postgresql/inst/bin:$PATH"
-        pg_ctl -D $HOME/pgdata -l $HOME/pgdata/logfile start
+        pg_ctl -D $HOME/pgdata -l $HOME/pgdata/logfile.log start
         # Wait for PostgreSQL to start
         for i in {1..30}; do
           if pg_isready -h localhost; then
