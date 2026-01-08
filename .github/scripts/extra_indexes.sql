@@ -7,7 +7,6 @@
 CREATE INDEX aka_name_idx_2 ON aka_name (name);
 CREATE INDEX movie_info_idx_idx_1 ON movie_info_idx (info);
 CREATE INDEX title_idx_1 ON title (production_year);
-CREATE INDEX movie_companies_idx_1 ON movie_companies (country_code);
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
