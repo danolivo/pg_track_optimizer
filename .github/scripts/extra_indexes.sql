@@ -30,3 +30,9 @@ CREATE INDEX ON title(id,kind_id);
  * One more analysis iteration.
  */
 CREATE INDEX ON movie_info_idx(movie_id,info_type_id);
+
+/*
+ * Indexing sugar. Just to see how optimiser could benefit from it.
+ */
+CREATE INDEX ON movie_info_idx(info_type_id,movie_id);
+CREATE INDEX ON movie_link (linked_movie_id,movie_id);
