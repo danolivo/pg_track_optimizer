@@ -16,3 +16,12 @@ CREATE INDEX idx_movie_info ON movie_info USING gin (info gin_trgm_ops);
 CREATE INDEX keyword_idx_1 ON keyword USING gin (keyword gin_trgm_ops);
 CREATE INDEX info_type_idx_1 ON info_type USING gin (info gin_trgm_ops);
 CREATE INDEX company_name_idx_1 ON company_name USING gin (country_code gin_trgm_ops);
+
+/*
+ * Second stage of analysis revealed the following indexes:
+ * (for parameterised joins)
+ */
+CREATE INDEX ON movie_link (movie_id, linked_movie_id);
+CREATE INDEX ON movie_companies(movie_id);
+CREATE INDEX ON movie_info_idx(movie_id);
+CREATE INDEX ON title(id,kind_id);
