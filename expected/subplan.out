@@ -78,15 +78,15 @@ JOIN inner_table i ON
 -- The plan should show "SubPlan" with loops > 10
 SELECT
   (avg_error -> 'mean')::numeric > 0. AS err_non_zero,
-  (max_jfiltered -> 'mean')::numeric > 0. AS jf_non_zero,
-  (max_lfiltered -> 'mean')::numeric > 0. AS lf_non_zero,
-  (worst_splan_factor -> 'mean')::numeric > 0. AS spf_non_zero,
+  (f_join_filter -> 'mean')::numeric > 0. AS jf_non_zero,
+  (f_scan_filter -> 'mean')::numeric > 0. AS sf_non_zero,
+  (f_worst_splan -> 'mean')::numeric > 0. AS spf_non_zero,
   evaluated_nodes,
   plan_nodes,
   nexecs
 FROM pg_track_optimizer()
 WHERE query LIKE '%FROM outer_table%';
- err_non_zero | jf_non_zero | lf_non_zero | spf_non_zero | evaluated_nodes | plan_nodes | nexecs 
+ err_non_zero | jf_non_zero | sf_non_zero | spf_non_zero | evaluated_nodes | plan_nodes | nexecs 
 --------------+-------------+-------------+--------------+-----------------+------------+--------
  t            | t           | t           | t            |               4 |          4 |      1
 (1 row)

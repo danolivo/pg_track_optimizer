@@ -91,8 +91,8 @@ prediction_walker(PlanState *pstate, void *context)
 			 * Higher values indicate subplans that consume significant time
 			 * and execute many loops - prime candidates for JOIN conversion.
 			 */
-			if (cost_factor >= ctx->worst_splan_factor || cost_factor < 0)
-				ctx->worst_splan_factor = cost_factor;
+			if (cost_factor >= ctx->f_worst_splan || cost_factor < 0)
+				ctx->f_worst_splan = cost_factor;
 		}
 	}
 
@@ -298,8 +298,8 @@ prediction_walker(PlanState *pstate, void *context)
 		if (jf_factor > 0.)
 			jf_factor *= relative_time / real_rows;
 
-		if (jf_factor > ctx->max_jf_factor)
-			ctx->max_jf_factor = jf_factor;
+		if (jf_factor > ctx->f_join_filter)
+			ctx->f_join_filter = jf_factor;
 	}
 
 	/*
@@ -324,8 +324,8 @@ prediction_walker(PlanState *pstate, void *context)
 		if (lf_factor > 0.)
 			lf_factor *= relative_time / real_rows;
 
-		if (lf_factor > ctx->max_lf_factor)
-			ctx->max_lf_factor = lf_factor;
+		if (lf_factor > ctx->f_scan_filter)
+			ctx->f_scan_filter = lf_factor;
 	}
 
 	ctx->nnodes++;
@@ -374,11 +374,11 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 					  queryDesc->totaltime->bufusage.local_blks_dirtied;
 
 	/* Initialize JOIN filtering statistics */
-	ctx->max_jf_factor = 0.;
+	ctx->f_join_filter = 0.;
 	/* Initialize leaf node filtering statistics */
-	ctx->max_lf_factor = 0.;
+	ctx->f_scan_filter = 0.;
 	/* No subplans has been evaluated yet */
-	ctx->worst_splan_factor = 0.;
+	ctx->f_worst_splan = 0.;
 
 	Assert(ctx->totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);

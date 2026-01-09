@@ -50,10 +50,10 @@ typedef struct PlanEstimatorContext
 	int64	local_blks;		/* Local blocks (read + written + dirtied) - indicates work_mem issues */
 
 	/* JOIN filtering statistics */
-	double	max_jf_factor;
+	double	f_join_filter;
 
 	/* Leaf node filtering statistics */
-	double	max_lf_factor;
+	double	f_scan_filter;
 
 	/*
 	 * Identify and track SubPlans.
@@ -70,7 +70,7 @@ typedef struct PlanEstimatorContext
 	 * most promising optimization candidates (highest values = best targets
 	 * for JOIN conversion).
 	 */
-	double	worst_splan_factor;
+	double	f_worst_splan;
 } PlanEstimatorContext;
 
 extern double plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx);

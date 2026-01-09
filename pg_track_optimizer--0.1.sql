@@ -168,9 +168,9 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT blks_accessed   rstats,
 	OUT local_blks      rstats,
 	OUT exec_time       rstats,
-	OUT max_jfiltered   rstats,
-	OUT max_lfiltered   rstats,
-	OUT worst_splan_factor rstats,
+	OUT f_join_filter   rstats,
+	OUT f_scan_filter   rstats,
+	OUT f_worst_splan   rstats,
 	OUT evaluated_nodes integer,
 	OUT plan_nodes      integer,
 	OUT nexecs          bigint
@@ -221,20 +221,20 @@ CREATE VIEW pg_track_optimizer AS SELECT
   t.exec_time -> 'count' AS time_cnt,
   t.exec_time -> 'mean' AS time_avg, t.exec_time -> 'stddev' AS time_dev,
 
-  /* Maximum JOIN filtered rows statistics */
-  t.max_jfiltered -> 'min' AS jf_min, t.max_jfiltered -> 'max' AS jf_max,
-  t.max_jfiltered -> 'count' AS jf_cnt,
-  t.max_jfiltered -> 'mean' AS jf_avg, t.max_jfiltered -> 'stddev' AS jf_dev,
+  /* JOIN filtering factor statistics (time-weighted filtering overhead) */
+  t.f_join_filter -> 'min' AS jf_min, t.f_join_filter -> 'max' AS jf_max,
+  t.f_join_filter -> 'count' AS jf_cnt,
+  t.f_join_filter -> 'mean' AS jf_avg, t.f_join_filter -> 'stddev' AS jf_dev,
 
-  /* Maximum leaf node filtered rows statistics */
-  t.max_lfiltered -> 'min' AS lf_min, t.max_lfiltered -> 'max' AS lf_max,
-  t.max_lfiltered -> 'count' AS lf_cnt,
-  t.max_lfiltered -> 'mean' AS lf_avg, t.max_lfiltered -> 'stddev' AS lf_dev,
+  /* Leaf node filtering factor statistics (time-weighted filtering overhead) */
+  t.f_scan_filter -> 'min' AS lf_min, t.f_scan_filter -> 'max' AS lf_max,
+  t.f_scan_filter -> 'count' AS lf_cnt,
+  t.f_scan_filter -> 'mean' AS lf_avg, t.f_scan_filter -> 'stddev' AS lf_dev,
 
   /* Worst SubPlan cost factor (nloops * cost) statistics */
-  t.worst_splan_factor -> 'min' AS sp_min, t.worst_splan_factor -> 'max' AS sp_max,
-  t.worst_splan_factor -> 'count' AS sp_cnt,
-  t.worst_splan_factor -> 'mean' AS sp_avg, t.worst_splan_factor -> 'stddev' AS sp_dev,
+  t.f_worst_splan -> 'min' AS sp_min, t.f_worst_splan -> 'max' AS sp_max,
+  t.f_worst_splan -> 'count' AS sp_cnt,
+  t.f_worst_splan -> 'mean' AS sp_avg, t.f_worst_splan -> 'stddev' AS sp_dev,
 
   t.evaluated_nodes, t.plan_nodes, t.nexecs
 FROM pg_track_optimizer() t, pg_database d

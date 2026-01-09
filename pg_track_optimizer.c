@@ -105,9 +105,9 @@ typedef struct DSMOptimizerTrackerEntry
 	RStats					blks_accessed;		/* Block I/O (hits + reads + writes) - running stats */
 	RStats					local_blks;			/* Local blocks (read + written + dirtied) - work_mem indicator */
 	RStats					exec_time;			/* Execution time per query - running stats (milliseconds) */
-	RStats					max_jf_factor;	/* Maximum filtered rows (nfiltered1+nfiltered2) across JOIN nodes */
-	RStats					max_lf_factor;	/* Maximum nfiltered1 for leaf nodes in the query plan */
-	RStats					worst_splan_factor;	/* Worst SubPlan factor: (nloops/log(nloops+1)) * (time/total_time) */
+	RStats					f_join_filter;	/* Maximum filtered rows (nfiltered1+nfiltered2) across JOIN nodes */
+	RStats					f_scan_filter;	/* Maximum nfiltered1 for leaf nodes in the query plan */
+	RStats					f_worst_splan;	/* Worst SubPlan factor: (nloops/log(nloops+1)) * (time/total_time) */
 	int64					nexecs;				/* Number of executions tracked */
 
 	/* Metadata */
@@ -408,9 +408,9 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		rstats_set_empty(&entry->blks_accessed);
 		rstats_set_empty(&entry->local_blks);
 		rstats_set_empty(&entry->exec_time);
-		rstats_set_empty(&entry->max_jf_factor);
-		rstats_set_empty(&entry->max_lf_factor);
-		rstats_set_empty(&entry->worst_splan_factor);
+		rstats_set_empty(&entry->f_join_filter);
+		rstats_set_empty(&entry->f_scan_filter);
+		rstats_set_empty(&entry->f_worst_splan);
 
 		entry->nexecs = 0;
 
@@ -440,12 +440,12 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	rstats_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
 	Assert(ctx->local_blks >= 0);
 	rstats_add_value(&entry->local_blks, (double) ctx->local_blks);
-	Assert(ctx->max_jf_factor >= 0.);
-	rstats_add_value(&entry->max_jf_factor, ctx->max_jf_factor);
-	Assert(ctx->max_lf_factor >= 0.);
-	rstats_add_value(&entry->max_lf_factor, ctx->max_lf_factor);
-	Assert(ctx->worst_splan_factor >= 0.);
-	rstats_add_value(&entry->worst_splan_factor, ctx->worst_splan_factor);
+	Assert(ctx->f_join_filter >= 0.);
+	rstats_add_value(&entry->f_join_filter, ctx->f_join_filter);
+	Assert(ctx->f_scan_filter >= 0.);
+	rstats_add_value(&entry->f_scan_filter, ctx->f_scan_filter);
+	Assert(ctx->f_worst_splan >= 0.);
+	rstats_add_value(&entry->f_worst_splan, ctx->f_worst_splan);
 
 	/* Accumulate execution-level totals */
 	Assert(ctx->totaltime >= 0.);
@@ -614,9 +614,9 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 		values[i++] = RStatsPGetDatum(&entry->blks_accessed);
 		values[i++] = RStatsPGetDatum(&entry->local_blks);
 		values[i++] = RStatsPGetDatum(&entry->exec_time);
-		values[i++] = RStatsPGetDatum(&entry->max_jf_factor);
-		values[i++] = RStatsPGetDatum(&entry->max_lf_factor);
-		values[i++] = RStatsPGetDatum(&entry->worst_splan_factor);
+		values[i++] = RStatsPGetDatum(&entry->f_join_filter);
+		values[i++] = RStatsPGetDatum(&entry->f_scan_filter);
+		values[i++] = RStatsPGetDatum(&entry->f_worst_splan);
 
 		values[i++] = Int32GetDatum(entry->evaluated_nodes);
 		values[i++] = Int32GetDatum(entry->plan_nodes);
@@ -1052,9 +1052,9 @@ _load_hash_table(TODSMRegistry *state)
 		memcpy(&entry->blks_accessed, &disk_entry.blks_accessed, sizeof(RStats));
 		memcpy(&entry->local_blks, &disk_entry.local_blks, sizeof(RStats));
 		memcpy(&entry->exec_time, &disk_entry.exec_time, sizeof(RStats));
-		memcpy(&entry->max_jf_factor, &disk_entry.max_jf_factor, sizeof(RStats));
-		memcpy(&entry->max_lf_factor, &disk_entry.max_lf_factor, sizeof(RStats));
-		memcpy(&entry->worst_splan_factor, &disk_entry.worst_splan_factor, sizeof(RStats));
+		memcpy(&entry->f_join_filter, &disk_entry.f_join_filter, sizeof(RStats));
+		memcpy(&entry->f_scan_filter, &disk_entry.f_scan_filter, sizeof(RStats));
+		memcpy(&entry->f_worst_splan, &disk_entry.f_worst_splan, sizeof(RStats));
 		entry->nexecs = disk_entry.nexecs;
 		entry->query_ptr = disk_entry.query_ptr;
 

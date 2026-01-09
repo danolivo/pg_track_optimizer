@@ -31,7 +31,7 @@ When walking the plan tree in `prediction_walker()` (plan_error.c:35-77):
 ### Cost Factor Calculation
 
 ```c
-worst_splan_factor = max(nloops × total_cost)
+f_worst_splan = max(nloops × total_cost)
 ```
 
 This metric represents:
@@ -46,23 +46,23 @@ The new field appears in three places:
 ### 1. C Structure (pg_track_optimizer.c:110)
 
 ```c
-RStats worst_splan_factor; /* Worst SubPlan cost factor (nloops × cost) */
+RStats f_worst_splan; /* Worst SubPlan cost factor (nloops × cost) */
 ```
 
 ### 2. SQL Function (pg_track_optimizer--0.1.sql:173)
 
 ```sql
-OUT worst_splan_factor rstats
+OUT f_worst_splan rstats
 ```
 
 ### 3. View Columns (pg_track_optimizer--0.1.sql:234-237)
 
 ```sql
-t.worst_splan_factor -> 'min' AS sp_min,
-t.worst_splan_factor -> 'max' AS sp_max,
-t.worst_splan_factor -> 'count' AS sp_cnt,
-t.worst_splan_factor -> 'mean' AS sp_avg,
-t.worst_splan_factor -> 'stddev' AS sp_dev
+t.f_worst_splan -> 'min' AS sp_min,
+t.f_worst_splan -> 'max' AS sp_max,
+t.f_worst_splan -> 'count' AS sp_cnt,
+t.f_worst_splan -> 'mean' AS sp_avg,
+t.f_worst_splan -> 'stddev' AS sp_dev
 ```
 
 ## Usage Examples
@@ -73,12 +73,12 @@ t.worst_splan_factor -> 'stddev' AS sp_dev
 SELECT
   queryid,
   LEFT(query, 50) AS query_preview,
-  ROUND((worst_splan_factor -> 'mean')::numeric, 2) AS avg_sp_factor,
-  ROUND((worst_splan_factor -> 'max')::numeric, 2) AS max_sp_factor,
+  ROUND((f_worst_splan -> 'mean')::numeric, 2) AS avg_sp_factor,
+  ROUND((f_worst_splan -> 'max')::numeric, 2) AS max_sp_factor,
   nexecs
 FROM pg_track_optimizer()
-WHERE (worst_splan_factor -> 'mean')::numeric > 1000
-ORDER BY (worst_splan_factor -> 'mean')::numeric DESC
+WHERE (f_worst_splan -> 'mean')::numeric > 1000
+ORDER BY (f_worst_splan -> 'mean')::numeric DESC
 LIMIT 10;
 ```
 
@@ -89,12 +89,12 @@ This finds queries where SubPlans have an average cost factor over 1000, indicat
 ```sql
 SELECT
   queryid,
-  ROUND((worst_splan_factor -> 'mean')::numeric, 2) AS sp_factor,
+  ROUND((f_worst_splan -> 'mean')::numeric, 2) AS sp_factor,
   ROUND((exec_time -> 'mean')::numeric, 2) AS avg_time_ms,
   nexecs
 FROM pg_track_optimizer()
-WHERE (worst_splan_factor -> 'mean')::numeric > 0
-ORDER BY (worst_splan_factor -> 'mean')::numeric DESC;
+WHERE (f_worst_splan -> 'mean')::numeric > 0
+ORDER BY (f_worst_splan -> 'mean')::numeric DESC;
 ```
 
 Queries with high `sp_factor` relative to `exec_time` suggest the SubPlan dominates execution time.
@@ -106,9 +106,9 @@ From `sql/subplan.sql` regression test:
 ```sql
 SELECT
   ROUND((avg_error -> 'mean')::numeric, 2) AS error,
-  ROUND((max_jfiltered -> 'mean')::numeric, 2) AS jf,
-  ROUND((max_lfiltered -> 'mean')::numeric, 2) AS lf,
-  ROUND((worst_splan_factor -> 'mean')::numeric, 2) AS sp_factor,
+  ROUND((f_join_filter -> 'mean')::numeric, 2) AS jf,
+  ROUND((f_scan_filter -> 'mean')::numeric, 2) AS lf,
+  ROUND((f_worst_splan -> 'mean')::numeric, 2) AS sp_factor,
   evaluated_nodes,
   plan_nodes,
   nexecs
@@ -189,7 +189,7 @@ SubPlans are likely a major performance bottleneck. Optimization strategies:
 
 3. **Parallel Workers**: Current implementation asserts `sps->worker_instrument == NULL`, meaning SubPlans don't parallelize (as expected - they're parallel-restricted).
 
-4. **No SubPlans**: Queries without SubPlans have `worst_splan_factor = 0.0`.
+4. **No SubPlans**: Queries without SubPlans have `f_worst_splan = 0.0`.
 
 ## Testing
 
@@ -197,7 +197,7 @@ The `sql/subplan.sql` regression test demonstrates SubPlan detection:
 
 - Creates tables with correlated subquery in JOIN clause
 - SubPlan executes 380 times (shown in EXPLAIN)
-- `worst_splan_factor` captures the cost burden
+- `f_worst_splan` captures the cost burden
 - Test validates the metric appears in output
 
 Run the test:
