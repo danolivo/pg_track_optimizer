@@ -25,3 +25,8 @@ CREATE INDEX ON movie_link (movie_id, linked_movie_id);
 CREATE INDEX ON movie_companies(movie_id);
 CREATE INDEX ON movie_info_idx(movie_id);
 CREATE INDEX ON title(id,kind_id);
+
+/*
+ * One more analysis iteration.
+ */
+CREATE INDEX ON movie_info_idx(movie_id,info_type_id);
