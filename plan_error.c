@@ -188,14 +188,18 @@ prediction_walker(PlanState *pstate, void *context)
 			 * We don't consider filtered tuples in non-leaf nodes.
 			 * The planner's prediction for filtered tuples comes from the nrows
 			 * values of incoming and outgoing tuples.
-			 * In contrast, in leaf nodes we don't see prediction on how many
-			 * tuples the planner anticipated to fetch from disk - only the nrows
-			 * value of the final result. So, it makes sense to take them into
-			 * account to highlight the potential issues.
+			 * The extension mature enough including separate leaf and join
+			 * filtering factors in the final report. So, we may detect fetching
+			 * inefficiencies in leaf nodes using that factor and let our error
+			 * to reflect prediction mismatches only.
+			 * Do not remove this code entirely for a while for the info and
+			 * possibly quick switch in the future.
 			 */
+#if 0
 			if (tmp_counter == ctx->counter)
 				wntuples += instr->nfiltered1 + instr->nfiltered2 +
 																instr->ntuples2;
+#endif
 
 			/* NOTE: nloops == 0 are filtered before */
 			wntuples += instr->ntuples;
@@ -211,11 +215,12 @@ prediction_walker(PlanState *pstate, void *context)
 			double	ntuples = pstate->instrument->ntuples;
 
 			/* In leaf nodes we should take into account filtered tuples */
+#if 0 /* Mostly for the info and possibly quick switch in the future */
 			if (tmp_counter == ctx->counter)
 				ntuples += (pstate->instrument->nfiltered1 +
 												pstate->instrument->nfiltered2 +
 												pstate->instrument->ntuples2);
-
+#endif
 			Assert(ntuples >= wntuples);
 			real_rows += (ntuples - wntuples) / (nloops - wnloops);
 		}
@@ -226,10 +231,12 @@ prediction_walker(PlanState *pstate, void *context)
 		real_rows = pstate->instrument->ntuples / nloops;
 
 		/* In leaf nodes we should take into account filtered tuples */
+#if 0 /* Mostly for the info and possibly quick switch in the future */
 		if (tmp_counter == ctx->counter)
 			real_rows += (pstate->instrument->nfiltered1 +
 									pstate->instrument->nfiltered2 +
 									pstate->instrument->ntuples2) / nloops;
+#endif
 	}
 
 	plan_rows = clamp_row_est(plan_rows);
@@ -240,7 +247,7 @@ prediction_walker(PlanState *pstate, void *context)
 	 * loops. It shouldn't be huge overestimation unless single iteration of
 	 * this subtree costs a lot.
 	 */
-	if (real_rows <= 0)
+	if (real_rows <= 0.0)
 		real_rows = 1. / pstate->instrument->nloops;
 
 	/*
@@ -272,6 +279,14 @@ prediction_walker(PlanState *pstate, void *context)
 	 * the maximum across all JOINs helps identify queries with inefficient
 	 * join strategies or missing indexes.
 	 * Divide by nloops to get per-loop average, as with other metrics.
+	 *
+	 * The factor is weighted by relative_time to prioritize nodes that consume
+	 * significant query execution time. A high ratio of filtered/produced rows
+	 * matters more when the node is expensive. Normalizing by real_rows gives
+	 * us the relative overhead: how many rows we filter per row we produce.
+	 * Thus, jf_factor represents the time-weighted filtering overhead, helping
+	 * identify JOINs where excessive filtering significantly impacts overall
+	 * query performance.
 	 */
 	if (IsA(pstate->plan, NestLoop) ||
 		IsA(pstate->plan, HashJoin) ||
@@ -281,7 +296,7 @@ prediction_walker(PlanState *pstate, void *context)
 								 pstate->instrument->nfiltered2) / nloops);
 
 		if (jf_factor > 0.)
-			jf_factor /= real_rows;
+			jf_factor *= relative_time / real_rows;
 
 		if (jf_factor > ctx->max_jf_factor)
 			ctx->max_jf_factor = jf_factor;
@@ -293,13 +308,21 @@ prediction_walker(PlanState *pstate, void *context)
 	 * High nfiltered1 values indicate many rows were fetched but filtered out,
 	 * suggesting potential for better indexes or more selective predicates.
 	 * Divide by nloops to get per-loop average, as with other metrics.
+	 *
+	 * Similar to jf_factor, we weight by relative_time to emphasize leaf nodes
+	 * where filtering overhead consumes substantial query time. Fetching 1000
+	 * rows but using only 10 is problematic, but only actionable if this node
+	 * takes significant time. Normalizing by real_rows gives the filtering
+	 * ratio (filtered/produced), and multiplying by relative_time yields a
+	 * time-weighted filtering cost. This helps surface scans that would benefit
+	 * most from better indexing or predicate pushdown.
 	 */
 	if (tmp_counter == ctx->counter)
 	{
 		double	lf_factor = (pstate->instrument->nfiltered1 / nloops);
 
 		if (lf_factor > 0.)
-			lf_factor /= real_rows;
+			lf_factor *= relative_time / real_rows;
 
 		if (lf_factor > ctx->max_lf_factor)
 			ctx->max_lf_factor = lf_factor;

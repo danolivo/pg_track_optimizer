@@ -73,9 +73,9 @@ JOIN inner_table i ON
 -- Verify the SubPlan executed multiple times
 -- The plan should show "SubPlan" with loops > 10
 SELECT
-  ROUND((avg_error -> 'mean')::numeric, 2) AS error,
-  ROUND((max_jfiltered -> 'mean')::numeric, 2) AS jf,
-  ROUND((max_lfiltered -> 'mean')::numeric, 2) AS lf,
+  (avg_error -> 'mean')::numeric > 0. AS err_non_zero,
+  (max_jfiltered -> 'mean')::numeric > 0. AS jf_non_zero,
+  (max_lfiltered -> 'mean')::numeric > 0. AS lf_non_zero,
   (worst_splan_factor -> 'mean')::numeric > 0. AS spf_non_zero,
   evaluated_nodes,
   plan_nodes,
