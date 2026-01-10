@@ -65,7 +65,30 @@ rstats_in(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("count must be non-negative")));
 
-	Assert(variance >= 0. && min_val <= max_val);
+	if (variance < 0.0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("variance must be non-negative")));
+
+	if (count > 0 && min_val > max_val)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("min value (%g) cannot be greater than max value (%g)",
+						min_val, max_val)));
+
+	/*
+	 * Validate canonical empty state: count=0 should have all zero fields.
+	 * This ensures consistency with rstats_set_empty() and binary format.
+	 */
+	if (count == 0)
+	{
+		if (mean != 0.0 || min_val != 0.0 || max_val != 0.0 || variance != 0.0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+					 errmsg("RStats with count=0 must have all zero fields"),
+					 errdetail("Got: mean=%g, min=%g, max=%g, variance=%g",
+							   mean, min_val, max_val, variance)));
+	}
 
 	/* Allocate and initialize the result */
 	result = (RStats *) palloc(sizeof(RStats));
@@ -123,6 +146,21 @@ rstats_recv(PG_FUNCTION_ARGS)
 	result->min = pq_getmsgfloat8(buf);
 	result->max = pq_getmsgfloat8(buf);
 
+	/*
+	 * Validate canonical empty state: count=0 requires all fields to be 0.0.
+	 * This catches corruption in binary protocol transmission.
+	 */
+	if (result->count == 0)
+	{
+		if (result->mean != 0.0 || result->m2 != 0.0 ||
+			result->min != 0.0 || result->max != 0.0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg("binary input for RStats has corrupted empty state"),
+					 errdetail("count=0 but other fields non-zero: mean=%g, m2=%g, min=%g, max=%g",
+							   result->mean, result->m2, result->min, result->max)));
+	}
+
 	PG_RETURN_RSTATS_P(result);
 }
 
@@ -132,11 +170,29 @@ rstats_recv(PG_FUNCTION_ARGS)
 Datum
 rstats_send(PG_FUNCTION_ARGS)
 {
-	RStats *stats = PG_GETARG_RSTATS_P(0);
-	StringInfoData buf;
+	RStats		   *stats = PG_GETARG_RSTATS_P(0);
+	StringInfoData	buf;
 
 	pq_begintypsend(&buf);
 	pq_sendint64(&buf, stats->count);
+
+	/*
+	 * Validate canonical empty state before serialization.
+	 * This catches internal bugs where RStats was corrupted in memory
+	 * before reaching the output function.
+	 */
+	if (stats->count == 0)
+	{
+		if (stats->mean != 0.0 || stats->m2 != 0.0 ||
+			stats->min != 0.0 || stats->max != 0.0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg("RStats internal corruption before serialization"),
+					 errdetail("count=0 but other fields non-zero: mean=%g, m2=%g, min=%g, max=%g",
+							   stats->mean, stats->m2, stats->min, stats->max),
+					 errhint("This indicates a bug in RStats manipulation code.")));
+	}
+
 	pq_sendfloat8(&buf, stats->mean);
 	pq_sendfloat8(&buf, stats->m2);
 	pq_sendfloat8(&buf, stats->min);
@@ -147,22 +203,61 @@ rstats_send(PG_FUNCTION_ARGS)
 
 /*
  * Set RStats to an empty (uninitialized) state.
- * We use -1 as a sentinel value for all fields except count because:
- * 1. We want to have meaningful serialised representation and control if
- * something happened in serialise/deserialise chain.
- * 2. It allows rstats_is_empty() to verify structural integrity
- * 3. It helps detect use of uninitialized/corrupted memory
+ *
+ * We use count=0 as the primary indicator of empty state, and set all other
+ * fields to 0.0 for consistency and to ensure clean serialization:
+ * 1. Provides a canonical empty representation across text/binary formats
+ * 2. Allows rstats_is_empty() to verify structural integrity
+ * 3. Ensures empty state displays cleanly: (count:0,mean:0,min:0,max:0,variance:0)
+ * 4. Prevents confusion with legitimate statistics that happen to have zero values
+ *
+ * Note: This means we cannot distinguish between truly empty stats and stats
+ * initialized with a single value of 0. This is acceptable as both represent
+ * valid states and the distinction is not operationally important.
  */
 void
 rstats_set_empty(RStats *result)
 {
 	result->count = 0;
 
-	/* Use -1 as sentinel to detect uninitialized state and memory corruption */
-	result->mean = -1.;
-	result->m2 = -1.;
-	result->min = -1.;
-	result->max = -1.;
+	/* Set all fields to 0.0 for canonical empty representation */
+	result->mean = 0.;
+	result->m2 = 0.;
+	result->min = 0.;
+	result->max = 0.;
+}
+
+/*
+ * Check if RStats is in empty (uninitialized) state.
+ *
+ * Primary criterion: count == 0
+ *
+ * Additionally validates that empty stats have canonical zero values for all
+ * fields. This catches deserialization errors or memory corruption where count
+ * was zeroed but other fields contain garbage.
+ *
+ * Note: Since we require strict zeros, this validation provides integrity
+ * checking across serialization boundaries (text/binary I/O).
+ */
+bool
+rstats_is_empty(RStats *value)
+{
+	if (value->count > 0)
+		return false;
+
+	/*
+	 * count == 0 detected. Verify all fields are zero for canonical empty state.
+	 * Non-zero values indicate corrupted data from deserialization or memory issues.
+	 */
+	if (value->mean != 0.0 || value->m2 != 0.0 || value->min != 0.0 ||
+		value->max != 0.0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("RStats data corruption detected"),
+				 errdetail("count=0 but other fields non-zero: mean=%g, m2=%g, min=%g, max=%g",
+						   value->mean, value->m2, value->min, value->max)));
+
+	return true;
 }
 
 static double
@@ -393,30 +488,6 @@ rstats_add(PG_FUNCTION_ARGS)
 	rstats_add_value(stats, value);
 
 	PG_RETURN_RSTATS_P(stats);
-}
-
-/*
- * Utility function to check if running statistics value is empty.
- * Also verifies the sentinel values to ensure the structure hasn't been
- * corrupted or used after being freed (or after serialization/deserialization).
- */
-bool
-rstats_is_empty(RStats *value)
-{
-	if (value->count > 0)
-		return false;
-
-	/*
-	 * Empty state detected. Verify sentinel values to ensure memory integrity.
-	 * If these assertions fail, it indicates memory corruption or use-after-free.
-	 */
-	Assert(value->count == 0);
-	Assert(value->mean == -1.);
-	Assert(value->m2 == -1.);
-	Assert(value->min == -1.);
-	Assert(value->max == -1.);
-
-	return true;
 }
 
 /*

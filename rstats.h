@@ -20,7 +20,8 @@
  *
  * Fixed-size type (40 bytes) - no varlena header needed.
  *
- * Empty state: count=0, other fields=-1 (sentinel values for validation)
+ * Empty state: count=0, all other fields=0.0 (canonical representation)
+ * This ensures consistent text/binary serialization and clean display.
  */
 typedef struct RStats
 {

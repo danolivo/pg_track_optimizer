@@ -1,12 +1,18 @@
 -- Test rstats base type
 CREATE EXTENSION pg_track_optimizer;
 
+\set VERBOSITY terse
+
 -- Test 1: Basic rstats creation and initialization
 SELECT 42.5::rstats;
 SELECT (42.1::double precision)::rstats;
 SELECT (NULL::double precision)::rstats;
 SELECT rstats(); -- Check empty state
 SELECT NULL::rstats -> 'mean';
+
+SELECT rstats('abc'); -- ERROR, rstats_in have a different format
+SELECT rstats(0), rstats(-1), rstats(36.6);
+SELECT rstats('12'::int2);
 
 SELECT q.s, q.s + 1.0, q.s + 2.0, q.s + NULL
   FROM (VALUES (1.0::rstats)) AS q(s);
@@ -89,6 +95,41 @@ ORDER BY sensor_id;
 
 -- Test 12: Invalid field name (should error)
 -- SELECT measurements -> 'invalid_field' FROM sensor_data LIMIT 1;
+
+-- Test 13: Sentinel Value Validation (from rstats.md Testing Recommendations)
+
+-- Test 13.1: Valid empty state - should succeed
+SELECT '(count:0,mean:0,min:0,max:0,variance:0)'::rstats;
+
+-- Test 13.2: Reject corrupt empty state - count=0 with non-zero mean
+SELECT '(count:0,mean:1,min:0,max:0,variance:0)'::rstats;
+
+-- Test 13.3: Reject corrupt empty state - count=0 with non-zero min
+SELECT '(count:0,mean:0,min:-1,max:0,variance:0)'::rstats;
+
+-- Test 13.4: Reject corrupt empty state - count=0 with non-zero max
+SELECT '(count:0,mean:0,min:0,max:5,variance:0)'::rstats;
+
+-- Test 13.5: Reject corrupt empty state - count=0 with non-zero variance
+SELECT '(count:0,mean:0,min:0,max:0,variance:1.5)'::rstats;
+
+-- Test 13.6: Binary round-trip
+SELECT rstats()::bytea::rstats;
+
+-- Test 13.7: Init with zero vs. empty - should have different counts
+SELECT (rstats(0.0) -> 'count')::int AS init_zero_count,
+       (rstats() -> 'count')::int AS empty_count;
+
+-- Test 13.8: Empty state equality - canonical representation
+SELECT rstats() = '(count:0,mean:0,min:0,max:0,variance:0)'::rstats AS empty_equals;
+
+-- Test 13.9: Empty state field access - all should be zero
+SELECT
+    (rstats() -> 'count')::int as count,
+    (rstats() -> 'mean')::numeric as mean,
+    (rstats() -> 'min')::numeric as min,
+    (rstats() -> 'max')::numeric as max,
+    (rstats() -> 'variance')::numeric as variance;
 
 -- Clean up
 DROP TABLE sensor_data;
