@@ -131,6 +131,52 @@ SELECT
     (rstats() -> 'max')::numeric as max,
     (rstats() -> 'variance')::numeric as variance;
 
+-- Test 14: Indexing on RStats fields
+-- Demonstrates that expression indexes work on extracted RStats fields
+
+-- Test 14.1: Single-column index on mean for range queries
+CREATE INDEX sd_idx_mean ON sensor_data ((measurements -> 'mean'));
+
+SET enable_seqscan = 'off';
+
+-- Should use index scan for range query
+EXPLAIN (COSTS OFF) SELECT sensor_id, measurements -> 'mean' as mean
+FROM sensor_data
+WHERE measurements -> 'mean' > 15
+ORDER BY measurements -> 'mean';
+
+RESET enable_seqscan;
+DROP INDEX sd_idx_mean;
+
+-- Test 14.2: Multi-column index for compound queries
+-- Index column order: (count, mean) allows filtering by count and sorting by mean
+CREATE INDEX sd_idx_compound
+  ON sensor_data ((measurements -> 'count'), (measurements -> 'mean'));
+
+SET enable_seqscan = 'off';
+
+-- Should use index for WHERE clause (but may still need Sort for ORDER BY)
+EXPLAIN (COSTS OFF) SELECT sensor_id FROM sensor_data
+WHERE measurements -> 'count' > 0
+ORDER BY measurements -> 'mean';
+
+RESET enable_seqscan;
+DROP INDEX sd_idx_compound;
+
+-- Test 14.3: Index for statistics-based filtering
+-- Useful for finding queries with high variance or outliers
+CREATE INDEX sd_idx_variance ON sensor_data ((measurements -> 'variance'));
+
+SET enable_seqscan = 'off';
+
+-- Find measurements with high variance
+EXPLAIN (COSTS OFF) SELECT sensor_id
+FROM sensor_data
+WHERE measurements -> 'variance' > 50;
+
+RESET enable_seqscan;
+DROP INDEX sd_idx_variance;
+
 -- Clean up
 DROP TABLE sensor_data;
 DROP EXTENSION pg_track_optimizer;
