@@ -277,6 +277,32 @@ WHERE measurements -> 'variance' > 50;
 
 RESET enable_seqscan;
 DROP INDEX sd_idx_variance;
+-- Next step: can we forbid such an update somehow? We only should allow
+-- explicit initialization and INSERT of a new value.
+CREATE TEMP TABLE tmp AS (SELECT * FROM sensor_data);
+UPDATE sensor_data SET measurements = rstats();
+SELECT * FROM sensor_data;
+ sensor_id |              measurements               
+-----------+-----------------------------------------
+         3 | (count:0,mean:0,min:0,max:0,variance:0)
+         1 | (count:0,mean:0,min:0,max:0,variance:0)
+         2 | (count:0,mean:0,min:0,max:0,variance:0)
+         4 | (count:0,mean:0,min:0,max:0,variance:0)
+         5 | (count:0,mean:0,min:0,max:0,variance:0)
+(5 rows)
+
+UPDATE sensor_data s SET measurements = v.measurements FROM tmp v
+WHERE v.sensor_id = s.sensor_id;
+SELECT * FROM sensor_data;
+ sensor_id |                              measurements                               
+-----------+-------------------------------------------------------------------------
+         3 | (count:2,mean:17,min:15.5,max:18.5,variance:4.5)
+         1 | (count:3,mean:20,min:10,max:30,variance:100)
+         2 | (count:3,mean:22.3333333333333,min:20,max:25,variance:6.33333333333333)
+         4 | (count:3,mean:11,min:10,max:12,variance:1)
+         5 | (count:3,mean:11,min:10,max:12,variance:1)
+(5 rows)
+
 -- Clean up
-DROP TABLE sensor_data;
+DROP TABLE sensor_data,tmp;
 DROP EXTENSION pg_track_optimizer;

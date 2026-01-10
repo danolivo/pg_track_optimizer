@@ -77,7 +77,6 @@ rstats_in(PG_FUNCTION_ARGS)
 	double	mean, min_val, max_val, variance;
 	int		nfields;
 
-
 	/* Parse the input string */
 	nfields = sscanf(str, "(count:"INT64_FORMAT",mean:%lf,min:%lf,max:%lf,variance:%lf)",
 					 &count, &mean, &min_val, &max_val, &variance);
@@ -164,7 +163,7 @@ Datum
 rstats_recv(PG_FUNCTION_ARGS)
 {
 	StringInfo  buf = (StringInfo) PG_GETARG_POINTER(0);
-	RStats *result;
+	RStats	   *result;
 
 	result = (RStats *) palloc(sizeof(RStats));
 
@@ -199,8 +198,8 @@ rstats_recv(PG_FUNCTION_ARGS)
 Datum
 rstats_from_bytea(PG_FUNCTION_ARGS)
 {
-	bytea	   *data = PG_GETARG_BYTEA_PP(0);
-	StringInfoData buf;
+	bytea		   *data = PG_GETARG_BYTEA_PP(0);
+	StringInfoData	buf;
 
 	/* Set up a StringInfo to mimic the internal receive buffer */
 	buf.data = VARDATA_ANY(data);
