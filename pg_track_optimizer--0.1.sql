@@ -80,6 +80,24 @@ CREATE CAST (numeric AS rstats)
 WITH FUNCTION rstats_init_numeric(numeric)
 AS IMPLICIT;
 
+-- Binary serialization casts
+-- Cast rstats to bytea uses rstats_send directly
+CREATE CAST (rstats AS bytea)
+WITH FUNCTION rstats_send(rstats)
+AS ASSIGNMENT;
+
+-- Wrapper function for bytea to rstats cast
+CREATE FUNCTION rstats_from_bytea(bytea)
+RETURNS rstats
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+-- Cast bytea to rstats requires wrapper since rstats_recv expects internal
+-- Note: This enables round-trip serialization for backups and testing
+CREATE CAST (bytea AS rstats)
+WITH FUNCTION rstats_from_bytea(bytea)
+AS ASSIGNMENT;
+
 --
 -- Addition operator (rstats + double precision)
 --

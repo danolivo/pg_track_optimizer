@@ -16,7 +16,6 @@
  *
  * Production Considerations:
  *   - Binary format lacks version field - future changes require dump/restore
- *   - No built-in casts to/from bytea (prevents simple binary round-trips)
  *   - Equality operator uses exact float comparison (no epsilon tolerance)
  *   - Type is specifically designed for pg_track_optimizer's use case
  *
@@ -41,6 +40,7 @@
 #include "utils/builtins.h"
 #include "utils/numeric.h"
 #include "utils/lsyscache.h"
+#include "varatt.h"
 
 #include <math.h>
 
@@ -51,6 +51,7 @@ PG_FUNCTION_INFO_V1(rstats_in);
 PG_FUNCTION_INFO_V1(rstats_out);
 PG_FUNCTION_INFO_V1(rstats_recv);
 PG_FUNCTION_INFO_V1(rstats_send);
+PG_FUNCTION_INFO_V1(rstats_from_bytea);
 
 PG_FUNCTION_INFO_V1(rstats_empty_constructor);
 PG_FUNCTION_INFO_V1(rstats_constructor);
@@ -189,6 +190,26 @@ rstats_recv(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_RSTATS_P(result);
+}
+
+/*
+ * Cast from bytea to rstats
+ * Wrapper around rstats_recv that accepts bytea instead of internal
+ */
+Datum
+rstats_from_bytea(PG_FUNCTION_ARGS)
+{
+	bytea	   *data = PG_GETARG_BYTEA_PP(0);
+	StringInfoData buf;
+
+	/* Set up a StringInfo to mimic the internal receive buffer */
+	buf.data = VARDATA_ANY(data);
+	buf.len = VARSIZE_ANY_EXHDR(data);
+	buf.maxlen = buf.len;
+	buf.cursor = 0;
+
+	/* Reuse rstats_recv logic by passing our buffer */
+	return DirectFunctionCall1(rstats_recv, PointerGetDatum(&buf));
 }
 
 /*

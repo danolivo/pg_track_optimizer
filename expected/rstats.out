@@ -192,7 +192,11 @@ SELECT '(count:0,mean:0,min:0,max:0,variance:1.5)'::rstats;
 ERROR:  RStats with count=0 must have all zero fields at character 8
 -- Test 13.6: Binary round-trip
 SELECT rstats()::bytea::rstats;
-ERROR:  cannot cast type rstats to bytea at character 16
+                 rstats                  
+-----------------------------------------
+ (count:0,mean:0,min:0,max:0,variance:0)
+(1 row)
+
 -- Test 13.7: Init with zero vs. empty - should have different counts
 SELECT (rstats(0.0) -> 'count')::int AS init_zero_count,
        (rstats() -> 'count')::int AS empty_count;
