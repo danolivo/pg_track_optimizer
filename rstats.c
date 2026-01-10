@@ -16,7 +16,7 @@
  *
  * Production Considerations:
  *   - Binary format lacks version field - future changes require dump/restore
- *   - Equality operator uses exact float comparison (no epsilon tolerance)
+ *   - Equality tests exact identity, not numerical equivalence (by design)
  *   - Type is specifically designed for pg_track_optimizer's use case
  *
  * Copyright (c) 2024-2026, Andrei Lepikhov
@@ -539,13 +539,21 @@ rstats_add(PG_FUNCTION_ARGS)
 }
 
 /*
-
- * Equality comparison for statistics type
- * Two statistics objects are equal if all their fields match.
+ * Equality comparison for RStats type
  *
- * NOTE:
- * Use direct (not an epsilon match) because the sematics of this operator is
- * that is exactly the same data - same values were coming in the same order.
+ * This operator tests for exact identity, not numerical equivalence.
+ * Two RStats objects are equal if and only if they accumulated the exact same
+ * sequence of values in the exact same order, resulting in bit-identical state.
+ *
+ * RATIONALE FOR EXACT COMPARISON:
+ * - Welford's algorithm is deterministic: same inputs → same internal state
+ * - Different input sequences may produce numerically similar but not identical stats
+ * - This operator is designed to detect "is this the exact same statistics object?"
+ *   not "are these statistics approximately equal?"
+ * - Use cases: caching, deduplication, identity checks in hash tables
+ *
+ * For numerical similarity testing, users should compare extracted statistics
+ * using appropriate epsilon tolerances on mean, variance, etc.
  */
 Datum
 rstats_eq(PG_FUNCTION_ARGS)
