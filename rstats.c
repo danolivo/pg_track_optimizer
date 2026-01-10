@@ -1,8 +1,35 @@
-/*
- * rstats.c - base type for incremental statistics type
+/*-------------------------------------------------------------------------
  *
- * This implements a 'statistics' base type that maintains
- * running statistics using Welford's algorithm for numerical stability.
+ * rstats.c
+ *	  PostgreSQL base type for numerically stable running statistics
+ *
+ * This module implements the RStats type, which maintains incremental
+ * statistics (count, mean, variance, min, max) using Welford's algorithm
+ * for numerical stability. The type is fixed-size (40 bytes) with no
+ * varlena header, enabling efficient storage and indexing.
+ *
+ * Key Features:
+ *   - Single-pass computation with excellent numerical stability
+ *   - Canonical empty state (count=0, all fields=0.0) with validation
+ *   - Expression index support via -> field accessor operator
+ *   - Four-layer validation (text/binary I/O, runtime checks)
+ *
+ * Production Considerations:
+ *   - Binary format lacks version field - future changes require dump/restore
+ *   - No built-in casts to/from bytea (prevents simple binary round-trips)
+ *   - Equality operator uses exact float comparison (no epsilon tolerance)
+ *   - Type is specifically designed for pg_track_optimizer's use case
+ *
+ * Copyright (c) 2024-2026, Andrei Lepikhov
+ *
+ * IDENTIFICATION
+ *	  contrib/pg_track_optimizer/rstats.c
+ *
+ * LICENSE
+ *	  This software may be modified and distributed under the terms
+ *	  of the MIT licence. See the LICENSE file for details.
+ *
+ *-------------------------------------------------------------------------
  */
 
 #include "postgres.h"

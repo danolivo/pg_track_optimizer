@@ -1,10 +1,21 @@
-/*
- * rstats.h - header for incremental statistics type
+/*-------------------------------------------------------------------------
  *
- * Copyright (c) 2024-2025 Andrei Lepikhov
+ * rstats.h
+ *	  Definitions for the RStats (running statistics) base type
  *
- * This software may be modified and distributed under the terms
- * of the MIT licence. See the LICENSE file for details.
+ * This header defines the RStats structure and API for maintaining
+ * numerically stable incremental statistics using Welford's algorithm.
+ *
+ * Copyright (c) 2024-2026, Andrei Lepikhov
+ *
+ * IDENTIFICATION
+ *	  contrib/pg_track_optimizer/rstats.h
+ *
+ * LICENSE
+ *	  This software may be modified and distributed under the terms
+ *	  of the MIT licence. See the LICENSE file for details.
+ *
+ *-------------------------------------------------------------------------
  */
 #ifndef RSTATS_H
 #define RSTATS_H
