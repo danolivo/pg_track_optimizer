@@ -116,6 +116,157 @@ If sentinel approach needs modification in the future:
 3. Add compatibility layer if needed
 4. Update all four validation points consistently
 
+## RStats Operators and Functions
+
+This section documents the available operators and their semantics.
+
+### Type Casts
+
+#### Numeric to RStats
+
+Implicit casts from numeric types initialize RStats with a single value:
+
+```sql
+-- From double precision
+SELECT 42.5::rstats;
+-- Result: (count:1,mean:42.5,min:42.5,max:42.5,variance:0)
+
+-- From integer
+SELECT 100::rstats;
+-- Result: (count:1,mean:100,min:100,max:100,variance:0)
+
+-- From numeric
+SELECT 3.14159::numeric::rstats;
+-- Result: (count:1,mean:3.14159,min:3.14159,max:3.14159,variance:0)
+```
+
+**Semantics**: Creates RStats initialized with a single data point.
+
+#### Binary Serialization Casts
+
+Assignment casts for binary serialization (backup/restore):
+
+```sql
+-- RStats to bytea (serialization)
+SELECT rstats()::bytea;
+-- Result: \x0000000000000000...
+
+-- Bytea to RStats (deserialization)
+SELECT '\x0000000000000000...'::bytea::rstats;
+-- Result: (count:0,mean:0,min:0,max:0,variance:0)
+
+-- Round-trip preserves state
+SELECT (10::rstats + 20 + 30)::bytea::rstats;
+-- Result: (count:3,mean:20,min:10,max:30,variance:100)
+```
+
+**Semantics**: Enables binary backup/restore and external storage.
+
+### Addition Operator (+)
+
+Accumulates a new value into running statistics:
+
+```sql
+-- Add double precision
+SELECT 10.0::rstats + 20.0 + 30.0;
+-- Result: (count:3,mean:20,min:10,max:30,variance:100)
+
+-- Add integer
+SELECT 5::rstats + 10 + 15;
+-- Result: (count:3,mean:10,min:5,max:15,variance:25)
+
+-- Chain multiple additions
+SELECT ((10.0::rstats + 20.0) + 30.0) + 40.0;
+-- Result: (count:4,mean:25,min:10,max:40,variance:166.67)
+```
+
+**Semantics**:
+- Updates mean, variance (m2), min, max using Welford's algorithm
+- Order-dependent: accumulates values sequentially
+- Deterministic: same sequence → same result
+- Handles NULL gracefully: `stats + NULL` returns NULL
+
+### Equality Operator (=)
+
+Tests for exact identity (bit-identical state):
+
+```sql
+-- Exact match: same sequence
+SELECT (10::rstats + 20 + 30) = (10::rstats + 20 + 30);
+-- Result: true
+
+-- Different sequence, same statistics
+SELECT (10::rstats + 20) = (15::rstats + 15);
+-- Result: false (mean is same, but internal state differs)
+
+-- Empty state comparison
+SELECT rstats() = rstats();
+-- Result: true
+```
+
+**Semantics**:
+- **Identity, not numerical equivalence**: Tests if two RStats accumulated the exact same sequence of values
+- **Deterministic algorithm**: Welford's algorithm guarantees same inputs → bit-identical state
+- **Exact float comparison**: No epsilon tolerance (by design)
+- **Use cases**: Caching, deduplication, identity checks in hash tables
+
+**For numerical similarity**, compare extracted statistics:
+```sql
+-- Check if means are approximately equal
+SELECT ABS((stats1 -> 'mean') - (stats2 -> 'mean')) < 0.001;
+```
+
+### Field Accessor Operator (->)
+
+Extracts statistical properties as double precision:
+
+```sql
+SELECT
+    stats -> 'count' AS count,
+    stats -> 'mean' AS mean,
+    stats -> 'variance' AS variance,
+    stats -> 'stddev' AS stddev,
+    stats -> 'min' AS min,
+    stats -> 'max' AS max
+FROM (SELECT (10::rstats + 20 + 30) AS stats) t;
+```
+
+**Available Fields**:
+- `count`: Number of accumulated values (int64 → float8)
+- `mean`: Arithmetic mean
+- `variance`: Sample variance (n-1 denominator)
+- `stddev`: Sample standard deviation (sqrt of variance)
+- `min`: Minimum value observed
+- `max`: Maximum value observed
+
+**Semantics**:
+- Returns `double precision` (cast as needed)
+- Variance uses sample formula: `m2 / (count - 1)`
+- Returns 0 variance for count ≤ 1
+- Works with expression indexes: `CREATE INDEX ON table ((stats -> 'mean'))`
+
+### Constructor Functions
+
+#### Empty Constructor
+
+```sql
+SELECT rstats();
+-- Result: (count:0,mean:0,min:0,max:0,variance:0)
+```
+
+**Semantics**: Creates canonical empty state.
+
+#### Polymorphic Constructor
+
+```sql
+-- Accepts any numeric-convertible type
+SELECT rstats(42::int2);
+SELECT rstats(3.14::float4);
+SELECT rstats(100::bigint);
+```
+
+**Semantics**: Initializes with a single value (delegates to type-specific casts).
+
 ### References
 
 - **Welford's Algorithm**: https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_online_algorithm
