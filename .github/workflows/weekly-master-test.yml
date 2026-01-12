@@ -31,21 +31,12 @@ jobs:
           xsltproc \
           ccache
 
-    - name: Cache PostgreSQL master build
-      uses: actions/cache@v4
-      id: pg-cache
-      with:
-        path: ~/postgresql
-        key: ${{ runner.os }}-pg-master-weekly-${{ hashFiles('.github/workflows/weekly-master-test.yml') }}
-
     - name: Clone PostgreSQL master
-      if: steps.pg-cache.outputs.cache-hit != 'true'
       run: |
         cd ~
         git clone --depth 1 --branch master https://github.com/postgres/postgres.git postgresql
 
     - name: Update PostgreSQL master
-      if: steps.pg-cache.outputs.cache-hit == 'true'
       run: |
         cd ~/postgresql
         git fetch origin master
