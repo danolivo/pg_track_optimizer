@@ -27,7 +27,7 @@
  */
 typedef struct PlanEstimatorContext
 {
-	double	totaltime;
+	double	totaltime; /* In msecs */
 	double	totalcost;
 
 	/* Number of nodes assessed */

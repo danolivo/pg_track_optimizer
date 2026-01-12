@@ -30,6 +30,7 @@ prediction_walker(PlanState *pstate, void *context)
 	int						tmp_counter;
 	double					relative_time;
 	double					node_error;
+	double					node_time; /* Time in msecs. */
 
 	/* At first, increment the counter */
 	ctx->counter++;
@@ -56,26 +57,27 @@ prediction_walker(PlanState *pstate, void *context)
 			Instrumentation	   *instr = sps->planstate->instrument;
 			double				nloops;
 			double				subplan_time;
-			double				time_ratio;
 			double				loop_factor;
 			double				cost_factor;
 
 			Assert(instr != NULL && sps->planstate->worker_instrument == NULL);
 
+			InstrEndLoop(instr);
+
 			if (instr->nloops <= 0. || ctx->totaltime <= 0.)
 				continue;
 
 			nloops = instr->nloops;
-			subplan_time = instr->total;
-			time_ratio = subplan_time / ctx->totaltime;
+#if PG_VERSION_NUM >= 190000
+			subplan_time = INSTR_TIME_GET_MILLISEC(instr->total);
+#else
+			subplan_time = instr->total * 1000.;
+#endif
+			relative_time = subplan_time / ctx->totaltime;
 
 			/*
 			 * Calculate logarithmically dampened loop factor.
-			 * This creates super-linear but sub-quadratic growth:
-			 *   10 loops → ~4.2×
-			 *   100 loops → ~21.7×
-			 *   1,000 loops → ~145×
-			 *   10,000 loops → ~1,087×
+			 * This creates super-linear but sub-quadratic growth.
 			 */
 			loop_factor = nloops / log(nloops + 1.);
 
@@ -84,7 +86,7 @@ prediction_walker(PlanState *pstate, void *context)
 			 * This can be compared across different queries to identify
 			 * the most promising optimization candidates.
 			 */
-			cost_factor = loop_factor * time_ratio;
+			cost_factor = loop_factor * relative_time;
 
 			/*
 			 * Track the maximum (worst) SubPlan cost factor.
@@ -106,8 +108,14 @@ prediction_walker(PlanState *pstate, void *context)
 
 	InstrEndLoop(pstate->instrument);
 	nloops = pstate->instrument->nloops;
+#if PG_VERSION_NUM >= 190000
+	node_time = INSTR_TIME_IS_ZERO(pstate->instrument->total) ? 0.0 :
+							INSTR_TIME_GET_MILLISEC(pstate->instrument->total);
+#else
+	node_time = pstate->instrument->total * 1000.;
+#endif
 
-	if (nloops <= 0.0 || pstate->instrument->total == 0.0)
+	if (nloops <= 0.0 || node_time <= 0.0)
 		/*
 		 * Skip 'never executed' case or "0-Tuple situation" and the case of
 		 * manual switching off of the timing instrumentation
@@ -250,18 +258,11 @@ prediction_walker(PlanState *pstate, void *context)
 	if (real_rows <= 0.0)
 		real_rows = 1. / pstate->instrument->nloops;
 
-	/*
-	 * Now, we can calculate the value of the relative estimation error made
-	 * by the optimiser.
-	 */
-	Assert(pstate->instrument->total > 0.0);
-
 	/* Don't afraid overflow here because plan_rows forced to be >= 1 */
 	node_error = fabs(log(real_rows / plan_rows));
 	ctx->avg_error += node_error;
 	ctx->rms_error += node_error * node_error;
-	relative_time = pstate->instrument->total /
-									pstate->instrument->nloops / ctx->totaltime;
+	relative_time = node_time / pstate->instrument->nloops / ctx->totaltime;
 	ctx->twa_error += node_error * relative_time;
 
 	/* Don't forget about very rare potential case of zero cost */
@@ -348,7 +349,12 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	ctx->rms_error = 0.;
 	ctx->twa_error = 0.;
 	ctx->wca_error = 0.;
-	ctx->totaltime = queryDesc->totaltime->total;
+#if PG_VERSION_NUM >= 190000
+	ctx->totaltime = INSTR_TIME_IS_ZERO(queryDesc->totaltime->total) ? 0.0 :
+						INSTR_TIME_GET_MILLISEC(queryDesc->totaltime->total);
+#else
+	ctx->totaltime = queryDesc->totaltime->total * 1000.;
+#endif
 	ctx->totalcost = queryDesc->plannedstmt->planTree->total_cost;
 	ctx->nnodes = 0;
 	ctx->counter = 0;

@@ -263,7 +263,7 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	track_attach_shmem();
 
 	if (track_optimizer_enabled(queryDesc, eflags))
-		queryDesc->instrument_options |= INSTRUMENT_TIMER | INSTRUMENT_ROWS;
+		queryDesc->instrument_options |= INSTRUMENT_TIMER | INSTRUMENT_ROWS | INSTRUMENT_BUFFERS;
 
 	if (prev_ExecutorStart)
 		prev_ExecutorStart(queryDesc, eflags);
@@ -297,11 +297,13 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 	ExplainState   *es = NewExplainState();
 	double			msec;
 
-	if (log_min_error < 0 || normalized_error < log_min_error)
+	if (log_min_error < 0. || normalized_error < log_min_error)
 		return;
-
+#if PG_VERSION_NUM >= 190000
+	msec = INSTR_TIME_GET_MILLISEC(queryDesc->totaltime->total);
+#else
 	msec = queryDesc->totaltime->total * 1000.0;
-
+#endif
 	/*
 	 * We are triggered by an estimation error. So, show only the options which
 	 * can be useful to determine a possible solution.
@@ -449,7 +451,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 	/* Accumulate execution-level totals */
 	Assert(ctx->totaltime >= 0.);
-	rstats_add_value(&entry->exec_time, ctx->totaltime * 1000.); /* sec -> msec */
+	rstats_add_value(&entry->exec_time, ctx->totaltime);
 	entry->nexecs++;
 
 	dshash_release_lock(htab, entry);
@@ -460,8 +462,8 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 static void
 track_ExecutorEnd(QueryDesc *queryDesc)
 {
-	MemoryContext	oldcxt;
-	double			normalized_error = -1.0;
+	MemoryContext			oldcxt;
+	double					normalized_error = -1.0;
 	PlanEstimatorContext	ctx;
 
 	track_attach_shmem();
@@ -478,8 +480,8 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 
 	/* TODO: need shared state 'status' instead of assertions */
 	Assert(queryDesc->planstate->instrument &&
-			queryDesc->instrument_options & INSTRUMENT_TIMER &&
-			queryDesc->instrument_options & INSTRUMENT_ROWS);
+		   queryDesc->instrument_options & INSTRUMENT_TIMER &&
+		   queryDesc->instrument_options & INSTRUMENT_ROWS);
 
 	/*
 	 * Make sure we operate in the per-query context, so any cruft will be
