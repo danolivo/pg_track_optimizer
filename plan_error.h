@@ -71,6 +71,21 @@ typedef struct PlanEstimatorContext
 	 * for JOIN conversion).
 	 */
 	double	f_worst_splan;
+
+	/*
+	 * Hash node efficiency factor.
+	 *
+	 * For Hash nodes, tracks the ratio of input rows to output rows:
+	 *   f_hash = input_rows / output_rows
+	 *
+	 * Where input_rows comes from the outer child (e.g., SeqScan feeding Hash)
+	 * and output_rows is the hash table size (rows stored in Hash).
+	 *
+	 * Values > 1 indicate that hash table consumed more rows than the HashJoin
+	 * actually needed. That means proper index scan might cause appearance of
+	 * more selective parameterised NestLoop JOIN.
+	 */
+	double	f_hash_efficiency;
 } PlanEstimatorContext;
 
 extern double plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx);
