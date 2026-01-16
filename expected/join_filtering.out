@@ -109,18 +109,42 @@ SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING 
 
 SELECT
   ROUND((avg_avg::numeric), 2) AS err,
-  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max,
-  evaluated_nodes en,
-  plan_nodes pn,
-  nexecs nex
+  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max, floor(ht_max) AS ht,
+  evaluated_nodes en, plan_nodes pn, nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%portable_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%';
- err  | jf_max | lf_max | en | pn | nex 
-------+--------+--------+----+----+-----
- 0.00 |      0 |      0 |  4 |  4 |   1
+ err  | jf_max | lf_max | ht | en | pn | nex 
+------+--------+--------+----+----+----+-----
+ 0.00 |      0 |      0 |  0 |  4 |  4 |   1
 (1 row)
+
+SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id) LIMIT 1;');
+                      portable_explain_analyze                      
+--------------------------------------------------------------------
+ Limit (actual rows=1 loops=1)
+   ->  Hash Join (actual rows=1 loops=1)
+         Hash Cond: (join_outer.id = join_inner.id)
+         ->  Seq Scan on join_outer (actual rows=1 loops=1)
+         ->  Hash (actual rows=100 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: NNkB
+               ->  Seq Scan on join_inner (actual rows=100 loops=1)
+(7 rows)
+
+SELECT
+  ROUND((avg_avg::numeric), 2) AS err,
+  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max, floor(ht_max) AS ht,
+  evaluated_nodes en, plan_nodes pn, nexecs nex
+FROM pg_track_optimizer
+WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
+  query NOT LIKE '%portable_explain_analyze%' AND
+  query NOT LIKE '%pg_track_optimizer%';
+ err  | jf_max | lf_max | ht | en | pn | nex 
+------+--------+--------+----+----+----+-----
+ 2.30 |      0 |      0 |  0 |  5 |  5 |   1
+ 0.00 |      0 |      0 |  0 |  4 |  4 |   1
+(2 rows)
 
 CREATE INDEX join_outer_id_idx ON join_outer (id);
 -- Second pass: only MergeJoin runtime optimisation detects an estimation error
@@ -149,9 +173,41 @@ WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%pg_track_optimizer%';
  err  | jf_max | lf_max | en | pn | nex 
 ------+--------+--------+----+----+-----
+ 2.30 |      0 |      0 |  5 |  5 |   1
  0.29 |      0 |      0 |  4 |  4 |   2
-(1 row)
+(2 rows)
 
+DROP INDEX join_outer_id_idx;
+TRUNCATE join_inner;
+INSERT INTO join_inner SELECT i, i % 10 FROM generate_series(-50, 50) i;
+VACUUM ANALYZE join_inner;
+SET enable_mergejoin = off;
+SET enable_material = off;
+SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+                   portable_explain_analyze                   
+--------------------------------------------------------------
+ Hash Join (actual rows=50 loops=1)
+   Hash Cond: (join_outer.id = join_inner.id)
+   ->  Seq Scan on join_outer (actual rows=1000 loops=1)
+   ->  Hash (actual rows=101 loops=1)
+         Buckets: 1024  Batches: 1  Memory Usage: NNkB
+         ->  Seq Scan on join_inner (actual rows=101 loops=1)
+(6 rows)
+
+SET enable_hashjoin = off;
+SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+                 portable_explain_analyze                  
+-----------------------------------------------------------
+ Nested Loop (actual rows=50 loops=1)
+   Join Filter: (join_inner.id = join_outer.id)
+   Rows Removed by Join Filter: 100950
+   ->  Seq Scan on join_inner (actual rows=101 loops=1)
+   ->  Seq Scan on join_outer (actual rows=1000 loops=101)
+(5 rows)
+
+RESET enable_hashjoin;
+RESET enable_mergejoin;
+RESET enable_material;
 DROP FUNCTION portable_explain_analyze;
 DROP TABLE join_inner,join_outer;
 DROP EXTENSION pg_track_optimizer;

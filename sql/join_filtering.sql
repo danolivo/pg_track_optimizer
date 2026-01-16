@@ -91,10 +91,19 @@ SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING 
 
 SELECT
   ROUND((avg_avg::numeric), 2) AS err,
-  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max,
-  evaluated_nodes en,
-  plan_nodes pn,
-  nexecs nex
+  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max, floor(ht_max) AS ht,
+  evaluated_nodes en, plan_nodes pn, nexecs nex
+FROM pg_track_optimizer
+WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
+  query NOT LIKE '%portable_explain_analyze%' AND
+  query NOT LIKE '%pg_track_optimizer%';
+
+SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id) LIMIT 1;');
+
+SELECT
+  ROUND((avg_avg::numeric), 2) AS err,
+  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max, floor(ht_max) AS ht,
+  evaluated_nodes en, plan_nodes pn, nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%portable_explain_analyze%' AND
@@ -114,6 +123,24 @@ FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%portable_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%';
+
+DROP INDEX join_outer_id_idx;
+TRUNCATE join_inner;
+INSERT INTO join_inner SELECT i, i % 10 FROM generate_series(-50, 50) i;
+VACUUM ANALYZE join_inner;
+
+SET enable_mergejoin = off;
+SET enable_material = off;
+
+SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+
+SET enable_hashjoin = off;
+
+SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+
+RESET enable_hashjoin;
+RESET enable_mergejoin;
+RESET enable_material;
 
 DROP FUNCTION portable_explain_analyze;
 DROP TABLE join_inner,join_outer;
