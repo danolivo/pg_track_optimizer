@@ -6,7 +6,7 @@ on:
 
 jobs:
   jo-bench:
-    name: JO-Bench on PG 17
+    name: JO-Bench on PG 18
     runs-on: ubuntu-latest
 
     steps:
@@ -29,18 +29,24 @@ jobs:
           xsltproc \
           ccache
 
+    - name: Get PostgreSQL branch HEAD SHA
+      id: pg-sha
+      run: |
+        SHA=$(git ls-remote https://github.com/postgres/postgres.git refs/heads/REL_18_STABLE | cut -f1)
+        echo "sha=$SHA" >> $GITHUB_OUTPUT
+
     - name: Cache PostgreSQL build
       uses: actions/cache@v4
       id: pg-cache
       with:
         path: ~/postgresql
-        key: ${{ runner.os }}-pg-17-jobench-${{ hashFiles('.github/workflows/jo-bench.yml') }}
+        key: ${{ runner.os }}-pg-18-jobench-${{ steps.pg-sha.outputs.sha }}
 
-    - name: Clone PostgreSQL 17
+    - name: Clone PostgreSQL 18
       if: steps.pg-cache.outputs.cache-hit != 'true'
       run: |
         cd ~
-        git clone --depth 1 --branch REL_17_STABLE https://github.com/postgres/postgres.git postgresql
+        git clone --depth 1 --branch REL_18_STABLE https://github.com/postgres/postgres.git postgresql
 
     - name: Build PostgreSQL
       if: steps.pg-cache.outputs.cache-hit != 'true'
