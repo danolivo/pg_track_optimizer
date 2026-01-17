@@ -294,7 +294,8 @@ prediction_walker(PlanState *pstate, void *context)
 		IsA(pstate->plan, MergeJoin))
 	{
 		double jf_factor = ((pstate->instrument->nfiltered1 +
-								 pstate->instrument->nfiltered2) / nloops);
+								 pstate->instrument->nfiltered2 +
+								 pstate->instrument->nfiltered3) / nloops);
 
 		if (jf_factor > 0.)
 			jf_factor *= relative_time / real_rows;
