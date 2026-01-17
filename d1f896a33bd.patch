@@ -1,0 +1,175 @@
+commit d1f896a33bd
+Author: Andrei V. Lepikhov <lepihov@gmail.com>
+Date:   Sat Jan 17 00:13:50 2026 +0100
+
+    Add "Rows Removed by Hash Matching" to EXPLAIN ANALYZE for hash joins
+    
+    This patch adds instrumentation to track outer tuples that found no
+    matching inner tuples during hash join bucket scanning. The new metric
+    "Rows Removed by Hash Matching" is displayed in EXPLAIN ANALYZE output
+    when hash clauses are present.
+    
+    The implementation adds a third filtered-tuple counter (nfiltered3) to
+    the Instrumentation struct. For hash joins, this counter tracks outer
+    tuples where no inner tuple with a matching hash value was found in
+    the probed bucket.
+    
+    Additionally, tuples where the hash value matched but the hash clause
+    evaluation failed are counted in nfiltered1 (displayed as part of
+    "Rows Removed by Join Filter" when a join filter is present).
+---
+ src/backend/commands/explain.c    |  7 ++++++-
+ src/backend/executor/instrument.c |  1 +
+ src/backend/executor/nodeHash.c   | 20 ++++++++++++++++----
+ src/include/executor/instrument.h |  3 ++-
+ src/include/nodes/execnodes.h     |  5 +++++
+ 5 files changed, 30 insertions(+), 6 deletions(-)
+
+diff --git a/src/backend/commands/explain.c b/src/backend/commands/explain.c
+index b7bb111688c..e68dc2d8eee 100644
+--- a/src/backend/commands/explain.c
++++ b/src/backend/commands/explain.c
+@@ -2191,6 +2191,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
+ 							"Hash Cond", planstate, ancestors, es);
+ 			show_upper_qual(((HashJoin *) plan)->join.joinqual,
+ 							"Join Filter", planstate, ancestors, es);
++			if (((HashJoin *) plan)->hashclauses)
++				show_instrumentation_count("Rows Removed by Hash Matching", 3,
++										   planstate, es);
+ 			if (((HashJoin *) plan)->join.joinqual)
+ 				show_instrumentation_count("Rows Removed by Join Filter", 1,
+ 										   planstate, es);
+@@ -3998,7 +4001,9 @@ show_instrumentation_count(const char *qlabel, int which,
+ 	if (!es->analyze || !planstate->instrument)
+ 		return;
+ 
+-	if (which == 2)
++	if (which == 3)
++		nfiltered = planstate->instrument->nfiltered3;
++	else if (which == 2)
+ 		nfiltered = planstate->instrument->nfiltered2;
+ 	else
+ 		nfiltered = planstate->instrument->nfiltered1;
+diff --git a/src/backend/executor/instrument.c b/src/backend/executor/instrument.c
+index edab92a0ebe..38a1b5a4757 100644
+--- a/src/backend/executor/instrument.c
++++ b/src/backend/executor/instrument.c
+@@ -183,6 +183,7 @@ InstrAggNode(Instrumentation *dst, Instrumentation *add)
+ 	dst->nloops += add->nloops;
+ 	dst->nfiltered1 += add->nfiltered1;
+ 	dst->nfiltered2 += add->nfiltered2;
++	dst->nfiltered3 += add->nfiltered3;
+ 
+ 	/* Add delta of buffer usage since entry to node's totals */
+ 	if (dst->need_bufusage)
+diff --git a/src/backend/executor/nodeHash.c b/src/backend/executor/nodeHash.c
+index f5d3edb90e2..66a9de6dbfc 100644
+--- a/src/backend/executor/nodeHash.c
++++ b/src/backend/executor/nodeHash.c
+@@ -1995,6 +1995,7 @@ ExecScanHashBucket(HashJoinState *hjstate,
+ 	HashJoinTable hashtable = hjstate->hj_HashTable;
+ 	HashJoinTuple hashTuple = hjstate->hj_CurTuple;
+ 	uint32		hashvalue = hjstate->hj_CurHashValue;
++	TupleTableSlot *inntuple = NULL;
+ 
+ 	/*
+ 	 * hj_CurTuple is the address of the tuple last returned from the current
+@@ -2014,8 +2015,6 @@ ExecScanHashBucket(HashJoinState *hjstate,
+ 	{
+ 		if (hashTuple->hashvalue == hashvalue)
+ 		{
+-			TupleTableSlot *inntuple;
+-
+ 			/* insert hashtable's tuple into exec slot so ExecQual sees it */
+ 			inntuple = ExecStoreMinimalTuple(HJTUPLE_MINTUPLE(hashTuple),
+ 											 hjstate->hj_HashTupleSlot,
+@@ -2027,6 +2026,9 @@ ExecScanHashBucket(HashJoinState *hjstate,
+ 				hjstate->hj_CurTuple = hashTuple;
+ 				return true;
+ 			}
++
++			/* Tuple matched hash value but failed hash join clauses */
++			InstrCountFiltered1(&hjstate->js.ps, 1);
+ 		}
+ 
+ 		hashTuple = hashTuple->next.unshared;
+@@ -2035,6 +2037,10 @@ ExecScanHashBucket(HashJoinState *hjstate,
+ 	/*
+ 	 * no match
+ 	 */
++
++	if (hjstate->hj_CurTuple == NULL && inntuple == NULL)
++		InstrCountFiltered3(&hjstate->js.ps, 1);
++
+ 	return false;
+ }
+ 
+@@ -2056,6 +2062,7 @@ ExecParallelScanHashBucket(HashJoinState *hjstate,
+ 	HashJoinTable hashtable = hjstate->hj_HashTable;
+ 	HashJoinTuple hashTuple = hjstate->hj_CurTuple;
+ 	uint32		hashvalue = hjstate->hj_CurHashValue;
++	TupleTableSlot *inntuple = NULL;
+ 
+ 	/*
+ 	 * hj_CurTuple is the address of the tuple last returned from the current
+@@ -2071,8 +2078,6 @@ ExecParallelScanHashBucket(HashJoinState *hjstate,
+ 	{
+ 		if (hashTuple->hashvalue == hashvalue)
+ 		{
+-			TupleTableSlot *inntuple;
+-
+ 			/* insert hashtable's tuple into exec slot so ExecQual sees it */
+ 			inntuple = ExecStoreMinimalTuple(HJTUPLE_MINTUPLE(hashTuple),
+ 											 hjstate->hj_HashTupleSlot,
+@@ -2084,6 +2089,9 @@ ExecParallelScanHashBucket(HashJoinState *hjstate,
+ 				hjstate->hj_CurTuple = hashTuple;
+ 				return true;
+ 			}
++
++			/* Tuple matched hash value but failed hash clauses */
++			InstrCountFiltered1(&hjstate->js.ps, 1);
+ 		}
+ 
+ 		hashTuple = ExecParallelHashNextTuple(hashtable, hashTuple);
+@@ -2092,6 +2100,10 @@ ExecParallelScanHashBucket(HashJoinState *hjstate,
+ 	/*
+ 	 * no match
+ 	 */
++
++	if (hjstate->hj_CurTuple == NULL && inntuple == NULL)
++		InstrCountFiltered3(&hjstate->js.ps, 1);
++
+ 	return false;
+ }
+ 
+diff --git a/src/include/executor/instrument.h b/src/include/executor/instrument.h
+index 9759f3ea5d8..200ecb2c348 100644
+--- a/src/include/executor/instrument.h
++++ b/src/include/executor/instrument.h
+@@ -88,8 +88,9 @@ typedef struct Instrumentation
+ 	double		ntuples;		/* total tuples produced */
+ 	double		ntuples2;		/* secondary node-specific tuple counter */
+ 	double		nloops;			/* # of run cycles for this node */
+-	double		nfiltered1;		/* # of tuples removed by scanqual or joinqual */
++	double		nfiltered1;		/* # of tuples removed by scanqual, joinqual or hashqual */
+ 	double		nfiltered2;		/* # of tuples removed by "other" quals */
++	double		nfiltered3;		/* # of tuples removed by "hash matching" */
+ 	BufferUsage bufusage;		/* total buffer usage */
+ 	WalUsage	walusage;		/* total WAL usage */
+ } Instrumentation;
+diff --git a/src/include/nodes/execnodes.h b/src/include/nodes/execnodes.h
+index f8053d9e572..5de0a08a456 100644
+--- a/src/include/nodes/execnodes.h
++++ b/src/include/nodes/execnodes.h
+@@ -1278,6 +1278,11 @@ typedef struct PlanState
+ 		if (((PlanState *)(node))->instrument) \
+ 			((PlanState *)(node))->instrument->nfiltered2 += (delta); \
+ 	} while(0)
++#define InstrCountFiltered3(node, delta) \
++	do { \
++		if (((PlanState *)(node))->instrument) \
++			((PlanState *)(node))->instrument->nfiltered3 += (delta); \
++	} while(0)
+ 
+ /*
+  * EPQState is state for executing an EvalPlanQual recheck on a candidate
