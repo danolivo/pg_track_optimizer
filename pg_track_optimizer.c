@@ -162,6 +162,7 @@ static const struct config_enum_entry format_options[] = {
 static int track_mode = TRACK_MODE_DISABLED;
 static double log_min_error = -1.0;
 static int hash_mem = 4096;
+static bool auto_flush = true;
 
 void _PG_init(void);
 
@@ -562,6 +563,17 @@ _PG_init(void)
 							NULL,
 							NULL,
 							NULL);
+
+	DefineCustomBoolVariable("pg_track_optimizer.auto_flush",
+							 "Automatically flush statistics to disk on backend shutdown",
+							 NULL,
+							 &auto_flush,
+							 true,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
 
 	MarkGUCPrefixReserved("pg_track_optimizer");
 
@@ -1222,7 +1234,7 @@ pto_before_shmem_exit(int code, Datum arg)
 	MemoryContext	oldcontext = CurrentMemoryContext;
 	volatile bool	success = false;
 
-	if (!IsUnderPostmaster || code != 0 || htab == NULL)
+	if (!IsUnderPostmaster || code != 0 || htab == NULL || !auto_flush)
 		return;
 
 	/* On the backend shutdown flush the data only if something new arrived */

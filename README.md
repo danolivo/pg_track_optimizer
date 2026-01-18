@@ -105,6 +105,20 @@ Memory limit (in KB) for the shared memory hash table.
 SET pg_track_optimizer.hash_mem = 10240;
 ```
 
+#### `pg_track_optimizer.auto_flush`
+Controls automatic flushing of statistics to disk on backend shutdown.
+
+- **`on`** (default): Automatically save statistics when a backend exits normally
+- **`off`**: Disable automatic flushing; statistics are only saved via explicit `pg_track_optimizer_flush()` calls
+
+```sql
+-- Disable automatic flushing (superuser only)
+ALTER SYSTEM SET pg_track_optimizer.auto_flush = off;
+SELECT pg_reload_conf();
+```
+
+This parameter can only be changed by superusers. When enabled, statistics are automatically persisted to disk when backends shut down, ensuring data is not lost on normal server restarts. Disabling this may be useful in high-throughput environments where the flush overhead is undesirable.
+
 ## Usage
 
 ### Viewing Tracked Queries

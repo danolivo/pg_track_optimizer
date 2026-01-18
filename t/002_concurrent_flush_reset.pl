@@ -78,6 +78,37 @@ pass('flush works after stress test');
 $node->safe_psql('postgres', 'SELECT pg_track_optimizer_reset();');
 pass('reset works after stress test');
 
+# ============================================================================
+# Second pass: test with auto_flush disabled
+# ============================================================================
+note("Starting second pass with auto_flush disabled");
+
+$node->safe_psql('postgres',
+	q{ALTER SYSTEM SET pg_track_optimizer.auto_flush = off;});
+$node->safe_psql('postgres', 'SELECT pg_reload_conf();');
+
+# Verify the GUC is set correctly
+my $auto_flush_value = $node->safe_psql('postgres',
+	'SHOW pg_track_optimizer.auto_flush;');
+is($auto_flush_value, 'off', 'auto_flush GUC is disabled');
+
+# Run the same pgbench workload with auto_flush disabled
+$node->command_ok(\@pgbench_cmd,
+	'pgbench concurrent flush/reset completed without errors (auto_flush=off)');
+
+# Verify the extension is still functional
+$result = $node->safe_psql('postgres',
+	'SELECT COUNT(*) >= 0 FROM pg_track_optimizer;');
+is($result, 't',
+	'pg_track_optimizer view is accessible after stress test (auto_flush=off)');
+
+# Manual flush and reset should still work
+$node->safe_psql('postgres', 'SELECT pg_track_optimizer_flush();');
+pass('manual flush works with auto_flush=off');
+
+$node->safe_psql('postgres', 'SELECT pg_track_optimizer_reset();');
+pass('manual reset works with auto_flush=off');
+
 # Clean up
 $node->stop;
 
