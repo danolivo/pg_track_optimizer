@@ -267,28 +267,9 @@ SELECT pg_track_optimizer_reset();
 -- Re-check error metrics
 ```
 
-## Understanding Error Metrics
-
-The extension calculates estimation error in a node using logarithmic scale to handle the wide range of row count estimates:
-
-```
-error = |log(actual_rows / estimated_rows)|
-```
-
-**Why logarithmic?**
-- An estimate of 10 when the actual is 100 has the same error magnitude as 100→10
-- Prevents massive row counts from dominating the metric
-- Aligns with how the planner internally handles costs
-
-**Interpreting values (example classification - specific boundaries may vary for different databases and queries):**
-- `error < 1.0`: Estimate within 3x of actual (acceptable)
-- `error 1.0-2.0`: Estimate off by 3-7x (investigate if frequent)
-- `error 2.0-3.0`: Estimate off by 7-20x (likely problematic)
-- `error > 3.0`: Estimate off by 20x+ (requires attention)
-
 ## Implementation Notes
 
-- **Leaf node filtering**: Filtered tuples (`nfiltered1`, `nfiltered2`) and heap fetches (`ntuples2`) are included in error calculations only for leaf nodes (scans). This reveals hidden disk I/O costs from massive page fetches that PostgreSQL's planner estimates don't expose. For non-leaf nodes like joins, the planner already estimates both input and output cardinality, so filtered tuples are implicitly visible in the estimate.
+- **Filtering metrics**: The extension tracks filtering overhead separately from error calculations via `f_scan_filter` and `f_join_filter` metrics. For leaf nodes (scans), `f_scan_filter` captures `nfiltered1` weighted by relative time and output rows. For JOIN nodes, `f_join_filter` captures `nfiltered1 + nfiltered2` similarly weighted. These metrics help identify inefficient scans or joins where many rows are fetched but filtered out. Filtered tuples are **not** included in error calculations (`avg_error`, `rms_error`, etc.) to keep error metrics focused on cardinality estimation accuracy rather than filtering efficiency.
 - **Never-executed nodes**: Nodes in unexecuted branches (e.g., alternative index paths in conditional plans) are skipped. Without actual execution, we cannot determine how many tuples these subtrees would have produced, even for a single hypothetical call, making error calculation impossible for these paths.
 - **Memory overhead**: Large query texts consume shared memory
 - **No automatic cleanup**: Statistics must be manually reset or flushed
@@ -303,15 +284,6 @@ The extension is designed for production use with minimal overhead:
 **Important note on queryId generation**: Approximately 95% of the overhead comes from queryId computation. If you already have `compute_query_id` enabled (e.g., by using `pg_stat_statements` or other extensions), the additional overhead from pg_track_optimizer becomes nearly undetectable.
 
 In `normal` mode with a reasonable threshold (e.g., 2.0), only a small fraction of queries are tracked, making the overhead virtually undetectable.
-
-## Contributing
-
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure CI passes
-5. Submit a pull request
 
 ## Licence
 
