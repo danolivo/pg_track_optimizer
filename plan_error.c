@@ -304,35 +304,6 @@ prediction_walker(PlanState *pstate, void *context)
 	}
 
 	/*
-	 * Track Hash node efficiency: ratio of input rows to output rows.
-	 *
-	 * For Hash nodes, compute input_rows / output_rows to measure hash table
-	 * utilization. A value > 1 indicates rows were consumed but not all made
-	 * it into the hash table (filtering or early termination).
-	 * As usual, multiply it by a time weighting factor to differentiate how
-	 * important this hash table is for the query performance.
-	 */
-	if (IsA(pstate, HashState))
-	{
-		PlanState  *outer_ps = outerPlanState(pstate);
-		double		input_rows;
-		double		hash_efficiency;
-
-		if (outer_ps == NULL || outer_ps->instrument == NULL)
-			elog(ERROR, "unexpected state of the hash state node detected");
-
-		input_rows = outer_ps->instrument->ntuples;
-
-		if (input_rows > 0.0)
-		{
-			hash_efficiency = relative_time * input_rows / (real_rows * nloops);
-
-			if (hash_efficiency > ctx->f_hash_efficiency)
-				ctx->f_hash_efficiency = hash_efficiency;
-		}
-	}
-
-	/*
 	 * Track maximum nfiltered1 for leaf nodes.
 	 * Leaf nodes are scan nodes that directly access data sources.
 	 * High nfiltered1 values indicate many rows were fetched but filtered out,
@@ -414,8 +385,6 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	ctx->f_scan_filter = 0.;
 	/* No subplans has been evaluated yet */
 	ctx->f_worst_splan = 0.;
-	/* Initialize Hash efficiency factor */
-	ctx->f_hash_efficiency = 0.;
 
 	Assert(ctx->totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);

@@ -91,7 +91,7 @@ SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING 
 
 SELECT
   ROUND((avg_avg::numeric), 2) AS err,
-  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max, floor(ht_max) AS ht,
+  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max,
   evaluated_nodes en, plan_nodes pn, nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
@@ -102,7 +102,7 @@ SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING 
 
 SELECT
   ROUND((avg_avg::numeric), 2) AS err,
-  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max, floor(ht_max) AS ht,
+  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max,
   evaluated_nodes en, plan_nodes pn, nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND

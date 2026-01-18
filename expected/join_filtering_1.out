@@ -109,15 +109,15 @@ SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING 
 
 SELECT
   ROUND((avg_avg::numeric), 2) AS err,
-  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max, floor(ht_max) AS ht,
+  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max,
   evaluated_nodes en, plan_nodes pn, nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%portable_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%';
- err  | jf_max | lf_max | ht | en | pn | nex 
-------+--------+--------+----+----+----+-----
- 0.00 |      0 |      0 |  0 |  4 |  4 |   1
+ err  | jf_max | lf_max | en | pn | nex 
+------+--------+--------+----+----+-----
+ 0.00 |      0 |      0 |  4 |  4 |   1
 (1 row)
 
 SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id) LIMIT 1;');
@@ -134,16 +134,16 @@ SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING 
 
 SELECT
   ROUND((avg_avg::numeric), 2) AS err,
-  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max, floor(ht_max) AS ht,
+  floor(jf_max) AS jf_max, floor(lf_max) AS lf_max,
   evaluated_nodes en, plan_nodes pn, nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%portable_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%';
- err  | jf_max | lf_max | ht | en | pn | nex 
-------+--------+--------+----+----+----+-----
- 0.00 |      0 |      0 |  0 |  4 |  4 |   1
- 2.30 |      0 |      0 |  0 |  5 |  5 |   1
+ err  | jf_max | lf_max | en | pn | nex 
+------+--------+--------+----+----+-----
+ 0.00 |      0 |      0 |  4 |  4 |   1
+ 2.30 |      0 |      0 |  5 |  5 |   1
 (2 rows)
 
 CREATE INDEX join_outer_id_idx ON join_outer (id);
