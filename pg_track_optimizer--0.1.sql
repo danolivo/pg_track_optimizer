@@ -260,11 +260,11 @@ WHERE t.dboid = d.oid AND datname = current_database();
 COMMENT ON VIEW pg_track_optimizer IS 'query tracking data for current database';
 
 CREATE FUNCTION pg_track_optimizer_flush()
-RETURNS VOID
+RETURNS integer
 AS 'MODULE_PATHNAME', 'to_flush'
 LANGUAGE C STRICT VOLATILE;
 
 CREATE FUNCTION pg_track_optimizer_reset()
-RETURNS VOID
+RETURNS integer
 AS 'MODULE_PATHNAME', 'to_reset'
 LANGUAGE C STRICT VOLATILE;

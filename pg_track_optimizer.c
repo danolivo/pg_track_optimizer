@@ -69,6 +69,8 @@ typedef struct TODSMRegistry
 	 * should cause the HTAB to be reset, along with a descriptive error.
 	 */
 	pg_atomic_uint32	htab_counter;
+
+	pg_atomic_uint32	need_syncing;
 } TODSMRegistry;
 
 /*
@@ -164,7 +166,8 @@ static int hash_mem = 4096;
 void _PG_init(void);
 
 static bool _load_hash_table(TODSMRegistry *state);
-static bool _flush_hash_table(void);
+static uint32 _flush_hash_table(void);
+static void pto_before_shmem_exit(int code, Datum arg);
 
 static inline bool
 track_optimizer_enabled(QueryDesc *queryDesc, int eflags)
@@ -210,6 +213,7 @@ to_init_shmem(void *ptr, void *arg)
 	htab = dshash_create(htab_dsa, &dsh_params, 0);
 	state->dshh = dshash_get_hash_table_handle(htab);
 	pg_atomic_init_u32(&state->htab_counter, 0);
+	pg_atomic_init_u32(&state->need_syncing, 0);
 
 	(void) _load_hash_table(state);
 }
@@ -417,6 +421,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		entry->nexecs = 0;
 
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
+		pg_atomic_write_u32(&shared->need_syncing, 1); /* New data arrived */
 	}
 
 	/*
@@ -564,6 +569,8 @@ _PG_init(void)
 	ExecutorStart_hook = explain_ExecutorStart;
 	prev_ExecutorEnd = ExecutorEnd_hook;
 	ExecutorEnd_hook = track_ExecutorEnd;
+
+	before_shmem_exit(pto_before_shmem_exit, (Datum) 0);
 }
 
 /* -----------------------------------------------------------------------------
@@ -588,9 +595,7 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 
 	InitMaterializedSRF(fcinfo, 0);
 
-	LWLockAcquire(&shared->lock, LW_SHARED);
-
-	dshash_seq_init(&stat, htab, true);
+	dshash_seq_init(&stat, htab, false);
 	while ((entry = dshash_seq_next(&stat)) != NULL)
 	{
 		int		i = 0;
@@ -598,6 +603,8 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 
 		Assert(entry->key.queryId != UINT64CONST(0) &&
 			   OidIsValid(entry->key.dbOid));
+
+		CHECK_FOR_INTERRUPTS();
 
 		memset(nulls, 0, DATATBL_NCOLS);
 		values[i++] = ObjectIdGetDatum(entry->key.dbOid);
@@ -628,7 +635,7 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 		Assert(i == DATATBL_NCOLS);
 	}
 	dshash_seq_term(&stat);
-	LWLockRelease(&shared->lock);
+
 	return (Datum) 0;
 }
 
@@ -636,17 +643,14 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
  * Reset the state of this extension to default. This will clean up all additionally
  * allocated resources and reset static and global state variables.
  */
-Datum
-to_reset(PG_FUNCTION_ARGS)
+static uint32
+reset_htab()
 {
 	dshash_seq_status			stat;
 	DSMOptimizerTrackerEntry   *entry;
-	uint32						counter;
+	uint32						counter = 0;
 
 	track_attach_shmem();
-
-	LWLockAcquire(&shared->lock, LW_EXCLUSIVE);
-	counter = pg_atomic_read_u32(&shared->htab_counter);
 
 	/*
 	 * Destroying shared hash table is a bit dangerous procedure. Without full
@@ -659,36 +663,55 @@ to_reset(PG_FUNCTION_ARGS)
 		Assert(entry->key.queryId != UINT64CONST(0) &&
 			   OidIsValid(entry->key.dbOid));
 
-		if (counter == 0)
-		{
-			/*
-			 * Exception behaviour: inconsistency between htab_counter and the
-			 * number of entries. Complain to the log once and afterwards
-			 * quietly remove entries.
-			 */
-			ereport(WARNING,
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("unexpected number of entries in the pg_track_optimizer HTAB"),
-					 errhint("look into the logs to discover leftovers")));
-			dshash_dump(htab);
-		}
-
-		counter--;
+		CHECK_FOR_INTERRUPTS();
 
 		/* At first, free memory, allocated for the query text */
 		Assert(DsaPointerIsValid(entry->query_ptr));
 		dsa_free(htab_dsa, entry->query_ptr);
 
 		dshash_delete_current(&stat);
+		pg_atomic_fetch_sub_u32(&shared->htab_counter, 1);
+
+		/*
+		 * htab_counter may be changes simultaneously. So, calculate how much
+		 * entries we removed using a local variable.
+		 */
+		counter++;
 	}
 	dshash_seq_term(&stat);
 
-	pg_atomic_write_u32(&shared->htab_counter, 0);
-	/* Clean disk storage too */
+	if (counter == 0)
+		PG_RETURN_UINT32(0);
+
+	/*
+	 * Flush final state of the HTAB to the disk. There are some records might
+	 * be added simultaneously. Lock is needed to prevent parallel file
+	 * operations.
+	 */
+	LWLockAcquire(&shared->lock, LW_EXCLUSIVE);
+
+	/*
+	 * Commands, attaching file must take exclusive lock beforehand and can't
+	 * concur here. HTAB writer must change disk_synced after the actual write.
+	 * So, the only flaw is that later we do an extra flush of the same table.
+	 * I think it is good trade-off with code complexity.
+	 */
+	pg_atomic_write_u32(&shared->need_syncing, 0);
 	(void) _flush_hash_table();
 
 	LWLockRelease(&shared->lock);
-	PG_RETURN_VOID();
+
+	/*
+	 * Let user know how much records we actually removed (hash table might be
+	 * filled in parallel)
+	 */
+	return counter;
+}
+
+Datum
+to_reset(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_UINT32(reset_htab());
 }
 
 /* -----------------------------------------------------------------------------
@@ -700,7 +723,7 @@ to_reset(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(to_flush);
 
 static const uint32 DATA_FILE_HEADER	= 12354678;
-static const uint32 DATA_FORMAT_VERSION = 20251226; /* Added CRC32C checksum */
+static const uint32 DATA_FORMAT_VERSION = 20260118; /* EOF marker entry instead of upfront count */
 static const char *DATA_PG_VERSION_STR = PG_VERSION_STR;
 
 #define EXTENSION_NAME "pg_track_optimizer"
@@ -720,41 +743,32 @@ static const char *filename = PG_STAT_TMP_DIR "/" EXTENSION_NAME ".stat";
  */
 
 /*
- * Specifics of the storage procedure of dshash table:
- * we don't block the table entirely, so we don't know how many records
- * will be eventually stored.
- * Return true in the case of success.
+ * Specifics of storing the dshash table:
+ * We don't block the table entirely, so we don't know how many records
+ * will be eventually stored. We write an EOF marker entry (with queryId=0
+ * and dbOid=InvalidOid) after all records, followed by the actual count.
+ * Returns the number of records written.
  */
-static bool
+static uint32
 _flush_hash_table(void)
 {
 	dshash_seq_status			stat;
 	DSMOptimizerTrackerEntry   *entry;
+	DSMOptimizerTrackerEntry	eof_entry;
 	const char				   *tmpfile = PG_STAT_TMP_DIR "/" EXTENSION_NAME".tmp";
 	File						file = -1;
 	ssize_t						written;
 	uint32						counter = 0;
-	uint32						nrecs;
 	const uint32				verstr_len = strlen(DATA_PG_VERSION_STR);
 	off_t						filepos = 0;
 	pg_crc32c					crc;
-
-	if (!IsUnderPostmaster)
-		return false;
 
 	file = PathNameOpenFile(tmpfile, O_CREAT | O_WRONLY | O_TRUNC | PG_BINARY);
 	if (file < 0)
 		ereport(ERROR,
 			(errcode_for_file_access(),
-			 errmsg("[%s] could not open file \"%s\": %m for writing",
+			 errmsg("[%s] could not open file \"%s\" for writing: %m",
 			 EXTENSION_NAME, tmpfile)));
-
-	/*
-	 * htab_counter now is quite reliable entity. So, use it dumping the HTAB.
-	 * According to paranoidal tradition, let's check consistency at the end
-	 * by comparing with the counter.
-	 */
-	nrecs = pg_atomic_read_u32(&shared->htab_counter);
 
 	/* Initialize CRC32C checksum computation */
 	INIT_CRC32C(crc);
@@ -788,14 +802,7 @@ _flush_hash_table(void)
 	COMP_CRC32C(crc, DATA_PG_VERSION_STR, verstr_len);
 	filepos += written;
 
-	written = FileWrite(file, &nrecs, sizeof(uint32), filepos,
-						WAIT_EVENT_DATA_FILE_WRITE);
-	if (written != sizeof(uint32))
-		goto error;
-	COMP_CRC32C(crc, &nrecs, sizeof(uint32));
-	filepos += written;
-
-	dshash_seq_init(&stat, htab, true);
+	dshash_seq_init(&stat, htab, false);
 	while ((entry = dshash_seq_next(&stat)) != NULL)
 	{
 		char   *str;
@@ -804,6 +811,8 @@ _flush_hash_table(void)
 		Assert(entry->key.queryId != UINT64CONST(0) &&
 			   OidIsValid(entry->key.dbOid) &&
 			   DsaPointerIsValid(entry->query_ptr));
+
+		CHECK_FOR_INTERRUPTS();
 
 		str = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
 		len = strlen(str);
@@ -838,7 +847,27 @@ _flush_hash_table(void)
 	}
 	dshash_seq_term(&stat);
 
-	Assert(counter == nrecs);
+	/*
+	 * Write EOF marker entry: an entry with queryId=0 and dbOid=InvalidOid
+	 * signals end of records. This allows the reader to detect end of data
+	 * without knowing the record count upfront.
+	 */
+	memset(&eof_entry, 0, sizeof(DSMOptimizerTrackerEntry));
+
+	written = FileWrite(file, &eof_entry, sizeof(DSMOptimizerTrackerEntry),
+						filepos, WAIT_EVENT_DATA_FILE_WRITE);
+	if (written != sizeof(DSMOptimizerTrackerEntry))
+		goto error;
+	COMP_CRC32C(crc, &eof_entry, sizeof(DSMOptimizerTrackerEntry));
+	filepos += written;
+
+	/* Write the actual record count after EOF marker for verification */
+	written = FileWrite(file, &counter, sizeof(uint32), filepos,
+						WAIT_EVENT_DATA_FILE_WRITE);
+	if (written != sizeof(uint32))
+		goto error;
+	COMP_CRC32C(crc, &counter, sizeof(uint32));
+	filepos += written;
 
 	/* Finalize CRC32C computation and write it to the file */
 	FIN_CRC32C(crc);
@@ -858,7 +887,7 @@ _flush_hash_table(void)
 	(void) durable_rename(tmpfile, filename, LOG);
 	elog(LOG, "[%s] %u records stored in file \"%s\"",
 		 EXTENSION_NAME, counter, filename);
-	return true;
+	return counter;
 
 	/*
 	 * Before throwing an error we should remove (potentially) inconsistent
@@ -873,17 +902,21 @@ error:
 			 EXTENSION_NAME, tmpfile)));
 
 	/* Keep compiler quiet */
-	return false;
+	return -1;
 }
 
 /*
- * Read data file record by record and add each record into the new table
- * Provide reference to the shared area because the local pointer still not
+ * Read data file record by record and add each record into the new table.
+ * Provide reference to the shared area because the local pointer is still not
  * initialized.
- * NOTE: Must be executed in safe state where no concurrency presents. Right now
- * it is executed under the internal DSM lock. Identify it by checking that
- * 'shared' variable is NULL.
+ * NOTE: Must be executed in a safe state where no concurrency is present. Right
+ * now it is executed under the internal DSM lock. Identify it by checking that
+ * the 'shared' variable is NULL.
  * TODO: we may add 'reload' option if user wants to fix a problem.
+ *
+ * Records are read until an EOF marker entry is encountered (queryId=0 and
+ * dbOid=InvalidOid). After the EOF marker, a stored record count is read
+ * for verification.
  */
 static bool
 _load_hash_table(TODSMRegistry *state)
@@ -896,8 +929,8 @@ _load_hash_table(TODSMRegistry *state)
 	uint32						verstr_len;
 	DSMOptimizerTrackerEntry	disk_entry;
 	DSMOptimizerTrackerEntry   *entry;
-	uint32						nrecs;
-	uint32						i;
+	uint32						stored_nrecs;
+	uint32						counter = 0;
 	off_t						filepos = 0;
 	pg_crc32c					crc;
 	pg_crc32c					stored_crc;
@@ -906,7 +939,7 @@ _load_hash_table(TODSMRegistry *state)
 	{
 		Assert(shared == NULL);
 		elog(WARNING,
-			 "[%s] unexpected state of shared memory. Do not load data",
+			 "[%s] unexpected state of shared memory; data not loaded",
 			 EXTENSION_NAME);
 		return false;
 	}
@@ -981,30 +1014,17 @@ _load_hash_table(TODSMRegistry *state)
 	pfree(ver_str);
 	filepos += nbytes;
 
-	nbytes = FileRead(file, &nrecs, sizeof(uint32), filepos,
-					  WAIT_EVENT_DATA_FILE_READ);
-	if (nbytes != sizeof(uint32))
-		goto read_error;
-	Assert(nrecs >= 0);
-	if (nrecs > hashtable_elements_max())
-	{
-		ereport(ERROR,
-			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-			 errmsg("[%s] file \"%s\" contains more records (%d) than hash table may consume (%d)",
-			 EXTENSION_NAME, filename, nrecs, hashtable_elements_max()),
-			 errdetail("skip data file load for safety"),
-			 errhint("remove the file manually or reset statistics in advance")));
-	}
-	COMP_CRC32C(crc, &nrecs, sizeof(uint32));
-	filepos += nbytes;
-
-	for (i = 0; i < nrecs; i++)
+	/*
+	 * Read records until we encounter the EOF marker entry (queryId=0 and
+	 * dbOid=InvalidOid).
+	 */
+	for (;;)
 	{
 		char   *str;
 		uint32	len;
 		bool	found;
 
-		/* First step - read the record */
+		/* Read the entry header */
 		nbytes = FileRead(file, &disk_entry, sizeof(DSMOptimizerTrackerEntry),
 						  filepos, WAIT_EVENT_DATA_FILE_READ);
 		if (nbytes != sizeof(DSMOptimizerTrackerEntry))
@@ -1012,10 +1032,26 @@ _load_hash_table(TODSMRegistry *state)
 		COMP_CRC32C(crc, &disk_entry, sizeof(DSMOptimizerTrackerEntry));
 		filepos += nbytes;
 
-		/* The case of next entry */
+		/* Check for EOF marker: queryId=0 and dbOid=InvalidOid */
+		if (disk_entry.key.queryId == UINT64CONST(0) &&
+			!OidIsValid(disk_entry.key.dbOid))
+			break;
 
-		Assert(disk_entry.key.queryId != UINT64CONST(0) &&
-			   OidIsValid(disk_entry.key.dbOid));
+		/* Validate entry has valid key */
+		if (disk_entry.key.queryId == UINT64CONST(0) ||
+			!OidIsValid(disk_entry.key.dbOid))
+			goto data_corrupted_error;
+
+		/* Check if we're exceeding hash table capacity */
+		if (counter >= (uint32) hashtable_elements_max())
+		{
+			ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("[%s] file \"%s\" contains more records than hash table may consume (%d)",
+				 EXTENSION_NAME, filename, hashtable_elements_max()),
+				 errdetail("skip data file load for safety"),
+				 errhint("remove the file manually or reset statistics in advance")));
+		}
 
 		/* Load query string */
 		nbytes = FileRead(file, &len, sizeof(uint32), filepos,
@@ -1062,6 +1098,27 @@ _load_hash_table(TODSMRegistry *state)
 		entry->query_ptr = disk_entry.query_ptr;
 
 		dshash_release_lock(htab, entry);
+		counter++;
+	}
+
+	/* Read stored record count for verification */
+	nbytes = FileRead(file, &stored_nrecs, sizeof(uint32), filepos,
+					  WAIT_EVENT_DATA_FILE_READ);
+	if (nbytes != sizeof(uint32))
+		goto read_error;
+	COMP_CRC32C(crc, &stored_nrecs, sizeof(uint32));
+	filepos += nbytes;
+
+	/* Verify record count matches */
+	if (counter != stored_nrecs)
+	{
+		ereport(WARNING,
+			(errcode(ERRCODE_DATA_CORRUPTED),
+			 errmsg("[%s] file \"%s\" record count mismatch",
+			 EXTENSION_NAME, filename),
+			 errdetail("Read %u records, but file claims %u", counter, stored_nrecs),
+			 errhint("File may be corrupted")));
+		goto reset_end;
 	}
 
 	/*
@@ -1084,7 +1141,7 @@ _load_hash_table(TODSMRegistry *state)
 			 EXTENSION_NAME, filename),
 			 errdetail("Expected %08X, found %08X", crc, stored_crc),
 			 errhint("File is corrupted - skipping load for safety")));
-		goto end;
+		goto reset_end;
 	}
 
 	/*
@@ -1102,9 +1159,9 @@ _load_hash_table(TODSMRegistry *state)
 	}
 
 	FileClose(file);
-	pg_atomic_write_u32(&state->htab_counter, nrecs);
+	pg_atomic_write_u32(&state->htab_counter, counter);
 	elog(LOG, "[%s] %u records loaded from file \"%s\"",
-		 EXTENSION_NAME, nrecs, filename);
+		 EXTENSION_NAME, counter, filename);
 	return true;
 
 read_error:
@@ -1122,6 +1179,12 @@ data_version_error:
 			(errcode(ERRCODE_DATA_CORRUPTED),
 			 errmsg("[%s] file \"%s\" has incompatible data format version %d instead of %d",
 			 EXTENSION_NAME, filename, fmtver, DATA_FORMAT_VERSION)));
+data_corrupted_error:
+	ereport(ERROR,
+			(errcode(ERRCODE_DATA_CORRUPTED),
+			 errmsg("[%s] file \"%s\" contains invalid entry with queryId "UINT64_FORMAT" and dbOid %u",
+			 EXTENSION_NAME, filename, disk_entry.key.queryId, disk_entry.key.dbOid),
+			 errhint("File may be corrupted")));
 crc_read_error:
 	ereport(ERROR,
 			(errcode(ERRCODE_DATA_CORRUPTED),
@@ -1129,6 +1192,8 @@ crc_read_error:
 			 EXTENSION_NAME, filename),
 			 errdetail("File may be truncated or corrupted"),
 			 errhint("Remove the file manually or reset statistics in advance")));
+reset_end:
+	reset_htab();
 end:
 	if (file >= 0)
 		FileClose(file);
@@ -1139,9 +1204,62 @@ end:
 Datum
 to_flush(PG_FUNCTION_ARGS)
 {
+	uint32 counter;
+
 	track_attach_shmem();
 
-	_flush_hash_table();
+	LWLockAcquire(&shared->lock, LW_EXCLUSIVE);
+	pg_atomic_write_u32(&shared->need_syncing, 0);
+	counter = _flush_hash_table();
+	LWLockRelease(&shared->lock);
 
-	PG_RETURN_VOID();
+	PG_RETURN_UINT32(counter);
+}
+
+static void
+pto_before_shmem_exit(int code, Datum arg)
+{
+	MemoryContext	oldcontext = CurrentMemoryContext;
+	volatile bool	success = false;
+
+	if (!IsUnderPostmaster || code != 0 || htab == NULL)
+		return;
+
+	/* On the backend shutdown flush the data only if something new arrived */
+	if (pg_atomic_read_u32(&shared->need_syncing) == 0)
+	{
+		LWLockRelease(&shared->lock);
+		return;
+	}
+
+	elog(DEBUG1, "[%s] saving hash table to the disk", EXTENSION_NAME);
+
+	/* Take exclusive lock to be sure no one flushes the data in parallel */
+	LWLockAcquire(&shared->lock, LW_EXCLUSIVE);
+
+	/* On backend shutdown be more careful and ignore errors */
+	PG_TRY();
+	{
+		/*
+		 * Write need_syncing in advance. That means - no second attempt after
+		 * failed write will be done. Is it voluntary trade-off.
+		 */
+		pg_atomic_write_u32(&shared->need_syncing, 0);
+		_flush_hash_table();
+		success = true;
+	}
+	PG_FINALLY();
+	{
+		LWLockRelease(&shared->lock);
+
+		if (!success)
+		{
+			/* Just ignore the error */
+			MemoryContextSwitchTo(oldcontext);
+			FlushErrorState();
+			elog(LOG, "[%s] On-shutdown statistic flush has been unsuccessful",
+				 EXTENSION_NAME);
+		}
+	}
+	PG_END_TRY();
 }

@@ -3,14 +3,14 @@ CREATE EXTENSION pg_track_optimizer;
 SELECT * FROM pg_track_optimizer_reset();
  pg_track_optimizer_reset 
 --------------------------
- 
+                        0
 (1 row)
 
 -- Test flushing zero hash table
 SELECT * FROM pg_track_optimizer_flush();
  pg_track_optimizer_flush 
 --------------------------
- 
+                        1
 (1 row)
 
 CREATE TABLE pto_test(x integer, y integer, z integer);

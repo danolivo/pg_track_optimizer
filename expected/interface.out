@@ -63,14 +63,14 @@ CREATE EXTENSION pg_track_optimizer;
                                  List of functions
  Schema |           Name           | Result data type | Argument data types | Type 
 --------+--------------------------+------------------+---------------------+------
- public | pg_track_optimizer_flush | void             |                     | func
+ public | pg_track_optimizer_flush | integer          |                     | func
 (1 row)
 
 \df pg_track_optimizer_reset
                                  List of functions
  Schema |           Name           | Result data type | Argument data types | Type 
 --------+--------------------------+------------------+---------------------+------
- public | pg_track_optimizer_reset | void             |                     | func
+ public | pg_track_optimizer_reset | integer          |                     | func
 (1 row)
 
 DROP EXTENSION pg_track_optimizer;

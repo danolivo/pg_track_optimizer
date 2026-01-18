@@ -19,7 +19,7 @@ CREATE EXTENSION pg_track_optimizer;
 SELECT * FROM pg_track_optimizer_reset();
  pg_track_optimizer_reset 
 --------------------------
- 
+                       16
 (1 row)
 
 SET pg_track_optimizer.mode = 'forced';
