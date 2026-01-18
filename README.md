@@ -293,7 +293,7 @@ SELECT pg_track_optimizer_reset();
 The extension is designed for production use with minimal overhead:
 - **Hook overhead**: ~1-2% in `forced` mode, negligible in `normal` mode
 - **Memory**: Configurable via `hash_mem`, typically 1-10 MB
-- **I/O**: None during operation (only on explicit flush)
+- **I/O**: None during operation; flush occurs on explicit call or backend shutdown (configurable via `auto_flush`)
 
 **Important note on queryId generation**: Approximately 95% of the overhead comes from queryId computation. If you already have `compute_query_id` enabled (e.g., by using `pg_stat_statements` or other extensions), the additional overhead from pg_track_optimizer becomes nearly undetectable.
 
