@@ -39,6 +39,9 @@ typedef struct PlanEstimatorContext
 	 */
 	int 	counter;
 
+	/* Number of JOIN nodes (NestLoop, HashJoin, MergeJoin) in the plan */
+	int		njoins;
+
 	/* Different types of planning error may be placed here */
 	double	avg_error;
 	double	rms_error;

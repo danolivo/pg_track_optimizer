@@ -48,7 +48,7 @@ PG_MODULE_MAGIC_EXT(
 );
 #endif
 
-#define DATATBL_NCOLS	(16)
+#define DATATBL_NCOLS	(17)
 
 typedef struct TODSMRegistry
 {
@@ -110,6 +110,7 @@ typedef struct DSMOptimizerTrackerEntry
 	RStats					f_join_filter;	/* Maximum filtered rows (nfiltered1+nfiltered2) across JOIN nodes */
 	RStats					f_scan_filter;	/* Maximum nfiltered1 for leaf nodes in the query plan */
 	RStats					f_worst_splan;	/* Worst SubPlan factor: (nloops/log(nloops+1)) * (time/total_time) */
+	RStats					njoins;			/* Number of JOIN nodes per execution - running stats */
 	int64					nexecs;				/* Number of executions tracked */
 
 	/* Metadata */
@@ -454,6 +455,8 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	rstats_add_value(&entry->f_scan_filter, ctx->f_scan_filter);
 	Assert(ctx->f_worst_splan >= 0.);
 	rstats_add_value(&entry->f_worst_splan, ctx->f_worst_splan);
+	Assert(ctx->njoins >= 0);
+	rstats_add_value(&entry->njoins, (double) ctx->njoins);
 
 	/* Accumulate execution-level totals */
 	Assert(ctx->totaltime >= 0.);
@@ -638,6 +641,7 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 		values[i++] = RStatsPGetDatum(&entry->f_join_filter);
 		values[i++] = RStatsPGetDatum(&entry->f_scan_filter);
 		values[i++] = RStatsPGetDatum(&entry->f_worst_splan);
+		values[i++] = RStatsPGetDatum(&entry->njoins);
 
 		values[i++] = Int32GetDatum(entry->evaluated_nodes);
 		values[i++] = Int32GetDatum(entry->plan_nodes);
@@ -1105,6 +1109,7 @@ _load_hash_table(TODSMRegistry *state)
 		memcpy(&entry->f_join_filter, &disk_entry.f_join_filter, sizeof(RStats));
 		memcpy(&entry->f_scan_filter, &disk_entry.f_scan_filter, sizeof(RStats));
 		memcpy(&entry->f_worst_splan, &disk_entry.f_worst_splan, sizeof(RStats));
+		memcpy(&entry->njoins, &disk_entry.njoins, sizeof(RStats));
 
 		entry->nexecs = disk_entry.nexecs;
 		entry->query_ptr = disk_entry.query_ptr;

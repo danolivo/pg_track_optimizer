@@ -189,6 +189,7 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT f_join_filter   rstats,
 	OUT f_scan_filter   rstats,
 	OUT f_worst_splan   rstats,
+	OUT njoins          rstats,
 	OUT evaluated_nodes integer,
 	OUT plan_nodes      integer,
 	OUT nexecs          bigint
@@ -253,6 +254,11 @@ CREATE VIEW pg_track_optimizer AS SELECT
   t.f_worst_splan -> 'min' AS sp_min, t.f_worst_splan -> 'max' AS sp_max,
   t.f_worst_splan -> 'count' AS sp_cnt,
   t.f_worst_splan -> 'mean' AS sp_avg, t.f_worst_splan -> 'stddev' AS sp_dev,
+
+  /* Number of JOIN nodes statistics */
+  t.njoins -> 'min' AS nj_min, t.njoins -> 'max' AS nj_max,
+  t.njoins -> 'count' AS nj_cnt,
+  t.njoins -> 'mean' AS nj_avg, t.njoins -> 'stddev' AS nj_dev,
 
   t.evaluated_nodes, t.plan_nodes, t.nexecs
 FROM pg_track_optimizer() t, pg_database d
