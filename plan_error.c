@@ -296,6 +296,8 @@ prediction_walker(PlanState *pstate, void *context)
 		double jf_factor = ((pstate->instrument->nfiltered1 +
 								 pstate->instrument->nfiltered2) / nloops);
 
+		ctx->njoins++;
+
 		if (jf_factor > 0.)
 			jf_factor *= relative_time / real_rows;
 
@@ -358,6 +360,7 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	ctx->totalcost = queryDesc->plannedstmt->planTree->total_cost;
 	ctx->nnodes = 0;
 	ctx->counter = 0;
+	ctx->njoins = 0;
 
 	/*
 	 * Collect buffer usage statistics from this execution (summarise permanent

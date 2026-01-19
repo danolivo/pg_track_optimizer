@@ -95,12 +95,12 @@ This table shows queries that appear in the top 10 for **all** error metrics (av
 ```
 **Example**:
 ```
-       queryid        |        query        |  error
-----------------------+---------------------+--------
-  8437282107574130241 | /* 30c.sql */       |  4.35
- -8317260399803614106 | /* 28c.sql */       |  4.07
- -1799126654562256384 | /* 29c.sql */       |  3.74
-  3901602676749870732 | /* 7c.sql */        |  3.63
+       queryid        |        query        |  error | nj_min | nj_max
+----------------------+---------------------+--------+--------+--------
+  8437282107574130241 | /* 30c.sql */       |  4.35  |      3 |      3
+ -8317260399803614106 | /* 28c.sql */       |  4.07  |      4 |      4
+ -1799126654562256384 | /* 29c.sql */       |  3.74  |      2 |      5
+  3901602676749870732 | /* 7c.sql */        |  3.63  |      3 |      3
 (4 rows)
 ```
 
@@ -117,19 +117,20 @@ This table shows queries that appear in the top 10 for **all** error metrics (av
 
 **Example**:
 ```
-       queryid        |        query        |  error
-----------------------+---------------------+--------
-  8437282107574130241 | /* 30c.sql */       |  4.35
- -8317260399803614106 | /* 28c.sql */       |  4.07
- -1799126654562256384 | /* 29c.sql */       |  3.74
-  3901602676749870732 | /* 7c.sql */        |  3.63
+       queryid        |        query        |  error | nj_min | nj_max
+----------------------+---------------------+--------+--------+--------
+  8437282107574130241 | /* 30c.sql */       |  4.35  |      3 |      3
+ -8317260399803614106 | /* 28c.sql */       |  4.07  |      4 |      4
+ -1799126654562256384 | /* 29c.sql */       |  3.74  |      2 |      5
+  3901602676749870732 | /* 7c.sql */        |  3.63  |      3 |      3
 (4 rows)
 ```
 
 **Table Format**:
-- **3 columns**: queryid, query, error
+- **5 columns**: queryid, query, error, nj_min, nj_max
 - **Query column**: Shows 32 first symbols of the SQL (e.g., `/* 30c.sql */`).
 - **Error column**: Single aggregated error metric (represents a mean field of simple average RStats error column)
+- **nj_min/nj_max columns**: Minimum and maximum number of JOIN nodes across executions. If these differ, it indicates plan variability for the same queryId.
 - Use PostgreSQL psql output format (not markdown table)
 - Include row count footer: `(N rows)`
 
@@ -147,7 +148,8 @@ WITH
     INTERSECT SELECT queryid FROM top_wca
   )
 SELECT
-  v.queryid, LEFT(v.query, 32), ROUND(v.avg_avg::numeric, 2) as error
+  v.queryid, LEFT(v.query, 32), ROUND(v.avg_avg::numeric, 2) as error,
+  v.nj_min::int, v.nj_max::int
 FROM pg_track_optimizer v
 WHERE v.queryid IN (SELECT queryid FROM intersection)
 ORDER BY error DESC;
@@ -164,11 +166,13 @@ The results above include the following metrics for each query:
 - **queryid**: Internal PostgreSQL query identifier
 - **query**: The SQL query text (normalised, with literals replaced by placeholders; truncated to first 32 characters)
 - **error**: Simple average error across plan nodes
+- **nj_min**: Minimum number of JOIN nodes across executions
+- **nj_max**: Maximum number of JOIN nodes across executions (differs from nj_min indicates plan variability)
 
 Only queries appearing in the top 10 of **every** error metric are shown, representing the most consistently problematic queries.
 ```
 
-**Note**: Simplified from the full pg_track_optimizer view schema. Only documents the 3 columns shown in the results table.
+**Note**: Simplified from the full pg_track_optimizer view schema. Only documents the 5 columns shown in the results table.
 
 ### 6. Workflow Artifacts Section
 
@@ -338,8 +342,8 @@ Before publishing a report, verify:
 - [ ] All commit links use 7-char short hash display, full hash in URL
 - [ ] Both Pass 1 and Pass 2 result sections present
 - [ ] Results table uses PostgreSQL psql format (not markdown table)
-- [ ] Results table has exactly 3 columns
-- [ ] Column Description documents only the 3 shown columns
+- [ ] Results table has exactly 5 columns (queryid, query, error, nj_min, nj_max)
+- [ ] Column Description documents only the 5 shown columns
 - [ ] Artifact links use relative paths: `job-pass/YYYY-MM-DD-HHMMSS/...`
 - [ ] All artifact links enclosed in markdown format: `[text](path)`
 - [ ] Footer contains workflow attribution link
