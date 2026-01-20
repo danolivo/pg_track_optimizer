@@ -47,7 +47,7 @@ SELECT
     ROUND((measurements -> 'mean')::numeric, 2) as mean,
     measurements -> 'min' as min,
     measurements -> 'max' as max,
-    ROUND((measurements -> 'variance')::numeric, 2) as variance,
+    ROUND((measurements -> 'stddev')::numeric, 2) as stddev2,
     ROUND((measurements -> 'stddev')::numeric, 2) as stddev
 FROM sensor_data
 ORDER BY sensor_id;
@@ -81,7 +81,7 @@ SELECT
     ROUND((measurements -> 'mean')::numeric, 2) as mean,
     measurements -> 'min' as min,
     measurements -> 'max' as max,
-    ROUND((measurements -> 'variance')::numeric, 2) as variance,
+    ROUND((measurements -> 'stddev')::numeric, 2) as stddev2,
     ROUND((measurements -> 'stddev')::numeric, 2) as stddev
 FROM sensor_data
 WHERE sensor_id <= 3
@@ -99,19 +99,19 @@ ORDER BY sensor_id;
 -- Test 13: Sentinel Value Validation (from rstats.md Testing Recommendations)
 
 -- Test 13.1: Valid empty state - should succeed
-SELECT '(count:0,mean:0,min:0,max:0,variance:0)'::rstats;
+SELECT '(count:0,mean:0,min:0,max:0,stddev:0)'::rstats;
 
 -- Test 13.2: Reject corrupt empty state - count=0 with non-zero mean
-SELECT '(count:0,mean:1,min:0,max:0,variance:0)'::rstats;
+SELECT '(count:0,mean:1,min:0,max:0,stddev:0)'::rstats;
 
 -- Test 13.3: Reject corrupt empty state - count=0 with non-zero min
-SELECT '(count:0,mean:0,min:-1,max:0,variance:0)'::rstats;
+SELECT '(count:0,mean:0,min:-1,max:0,stddev:0)'::rstats;
 
 -- Test 13.4: Reject corrupt empty state - count=0 with non-zero max
-SELECT '(count:0,mean:0,min:0,max:5,variance:0)'::rstats;
+SELECT '(count:0,mean:0,min:0,max:5,stddev:0)'::rstats;
 
--- Test 13.5: Reject corrupt empty state - count=0 with non-zero variance
-SELECT '(count:0,mean:0,min:0,max:0,variance:1.5)'::rstats;
+-- Test 13.5: Reject corrupt empty state - count=0 with non-zero stddev
+SELECT '(count:0,mean:0,min:0,max:0,stddev:1.5)'::rstats;
 
 -- Test 13.6: Binary round-trip
 SELECT rstats()::bytea::rstats;
@@ -121,7 +121,7 @@ SELECT (rstats(0.0) -> 'count')::int AS init_zero_count,
        (rstats() -> 'count')::int AS empty_count;
 
 -- Test 13.8: Empty state equality - canonical representation
-SELECT rstats() = '(count:0,mean:0,min:0,max:0,variance:0)'::rstats AS empty_equals;
+SELECT rstats() = '(count:0,mean:0,min:0,max:0,stddev:0)'::rstats AS empty_equals;
 
 -- Test 13.9: Empty state field access - all should be zero
 SELECT
@@ -129,7 +129,7 @@ SELECT
     (rstats() -> 'mean')::numeric as mean,
     (rstats() -> 'min')::numeric as min,
     (rstats() -> 'max')::numeric as max,
-    (rstats() -> 'variance')::numeric as variance;
+    (rstats() -> 'stddev')::numeric as stddev;
 
 -- Test 14: Indexing on RStats fields
 -- Demonstrates that expression indexes work on extracted RStats fields
@@ -164,18 +164,18 @@ RESET enable_seqscan;
 DROP INDEX sd_idx_compound;
 
 -- Test 14.3: Index for statistics-based filtering
--- Useful for finding queries with high variance or outliers
-CREATE INDEX sd_idx_variance ON sensor_data ((measurements -> 'variance'));
+-- Useful for finding queries with high stddev or outliers
+CREATE INDEX sd_idx_stddev ON sensor_data ((measurements -> 'stddev'));
 
 SET enable_seqscan = 'off';
 
--- Find measurements with high variance
+-- Find measurements with high stddev
 EXPLAIN (COSTS OFF) SELECT sensor_id
 FROM sensor_data
-WHERE measurements -> 'variance' > 50;
+WHERE measurements -> 'stddev' > 5;
 
 RESET enable_seqscan;
-DROP INDEX sd_idx_variance;
+DROP INDEX sd_idx_stddev;
 
 -- Next step: can we forbid such an update somehow? We only should allow
 -- explicit initialization and INSERT of a new value.
@@ -187,6 +187,33 @@ UPDATE sensor_data s SET measurements = v.measurements FROM tmp v
 WHERE v.sensor_id = s.sensor_id;
 SELECT * FROM sensor_data;
 
+-- Test 15: rstats_agg aggregate function
+CREATE TABLE agg_test (grp int, val double precision);
+INSERT INTO agg_test VALUES (1, 10), (1, 20), (1, 30);
+INSERT INTO agg_test VALUES (2, 5), (2, 15);
+INSERT INTO agg_test VALUES (3, 100);
+
+-- Basic aggregation by group
+SELECT grp, rstats_agg(val) FROM agg_test GROUP BY grp ORDER BY grp;
+
+-- Verify statistics are correct
+SELECT grp,
+       (rstats_agg(val) -> 'count')::int as count,
+       (rstats_agg(val) -> 'mean')::numeric as mean,
+       (rstats_agg(val) -> 'min')::numeric as min,
+       (rstats_agg(val) -> 'max')::numeric as max
+FROM agg_test GROUP BY grp ORDER BY grp;
+
+-- Test with NULL values (should be skipped)
+INSERT INTO agg_test VALUES (4, NULL), (4, 50), (4, NULL), (4, 100);
+SELECT grp, rstats_agg(val) FROM agg_test WHERE grp = 4 GROUP BY grp;
+
+-- Test aggregation without GROUP BY
+SELECT rstats_agg(val) FROM agg_test WHERE grp <= 2;
+
+DROP TABLE agg_test;
+
 -- Clean up
 DROP TABLE sensor_data,tmp;
+SELECT * FROM pg_track_optimizer_reset();
 DROP EXTENSION pg_track_optimizer;

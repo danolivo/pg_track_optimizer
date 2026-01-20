@@ -169,6 +169,24 @@ CREATE OPERATOR -> (
 COMMENT ON OPERATOR -> (rstats, text)
   IS 'Field accessor operator for rstats type (e.g., stats -> ''mean'')';
 
+--
+-- Aggregate function for collecting values into rstats
+--
+
+CREATE FUNCTION rstats_agg_sfunc(rstats, double precision)
+RETURNS rstats
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE;
+COMMENT ON FUNCTION rstats_agg_sfunc(rstats, double precision)
+  IS 'State transition function for rstats_agg aggregate';
+
+CREATE AGGREGATE rstats_agg(double precision) (
+  SFUNC = rstats_agg_sfunc,
+  STYPE = rstats
+);
+COMMENT ON AGGREGATE rstats_agg(double precision)
+  IS 'Aggregate function that collects values and computes running statistics';
+
 /* *****************************************************************************
  *
  * The pg_track_optimizer's UI objects is defined here

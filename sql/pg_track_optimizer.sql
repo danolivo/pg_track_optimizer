@@ -88,4 +88,5 @@ SELECT val FROM verify_test;
 SELECT query,evaluated_nodes,plan_nodes,nexecs
 FROM pg_track_optimizer() WHERE query LIKE '%FROM verify_test%';
 
+SELECT * FROM pg_track_optimizer_reset();
 DROP EXTENSION pg_track_optimizer;

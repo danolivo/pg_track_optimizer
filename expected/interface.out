@@ -78,4 +78,10 @@ CREATE EXTENSION pg_track_optimizer;
  public | pg_track_optimizer_reset | integer          |                     | func
 (1 row)
 
+SELECT * FROM pg_track_optimizer_reset();
+ pg_track_optimizer_reset 
+--------------------------
+                        5
+(1 row)
+
 DROP EXTENSION pg_track_optimizer;

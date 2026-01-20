@@ -26,7 +26,7 @@
  * Internal representation of running statistics
  *
  * Uses Welford's algorithm to maintain numerically stable running statistics.
- * This algorithm computes mean and variance in a single pass with excellent
+ * This algorithm computes mean and stddev in a single pass with excellent
  * numerical stability, avoiding catastrophic cancellation errors.
  *
  * Fixed-size type (40 bytes) - no varlena header needed.
@@ -38,7 +38,7 @@ typedef struct RStats
 {
 	int64	count;	/* number of values accumulated */
 	double	mean;	/* running mean (arithmetic average) */
-	double	m2;		/* sum of squared differences from mean (for variance calculation) */
+	double	m2;		/* sum of squared differences from mean (for stddev calculation) */
 	double	min;	/* minimum value observed */
 	double	max;	/* maximum value observed */
 } RStats;

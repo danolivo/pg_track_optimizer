@@ -114,10 +114,10 @@ SELECT * FROM t1;
 
 SELECT query,avg_error,rms_error,evaluated_nodes,plan_nodes,nexecs,blks_accessed
 FROM pg_track_optimizer() WHERE query LIKE '%FROM t1%';
-                               query                                |                avg_error                |                rms_error                | evaluated_nodes | plan_nodes | nexecs |                 blks_accessed                 
---------------------------------------------------------------------+-----------------------------------------+-----------------------------------------+-----------------+------------+--------+-----------------------------------------------
- EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)+| (count:1,mean:0,min:0,max:0,variance:0) | (count:1,mean:0,min:0,max:0,variance:0) |               2 |          2 |      1 | (count:1,mean:541,min:541,max:541,variance:0)
- SELECT * FROM t1;                                                  |                                         |                                         |                 |            |        | 
+                               query                                |               avg_error               |               rms_error               | evaluated_nodes | plan_nodes | nexecs |                blks_accessed                
+--------------------------------------------------------------------+---------------------------------------+---------------------------------------+-----------------+------------+--------+---------------------------------------------
+ EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)+| (count:1,mean:0,min:0,max:0,stddev:0) | (count:1,mean:0,min:0,max:0,stddev:0) |               2 |          2 |      1 | (count:1,mean:541,min:541,max:541,stddev:0)
+ SELECT * FROM t1;                                                  |                                       |                                       |                 |            |        | 
 (1 row)
 
 /*
@@ -160,6 +160,12 @@ FROM pg_track_optimizer() WHERE query LIKE '%FROM verify_test%';
 --------------------------------------------------------------------+-----------------+------------+--------
  EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)+|               2 |          2 |      1
  SELECT val FROM verify_test;                                       |                 |            | 
+(1 row)
+
+SELECT * FROM pg_track_optimizer_reset();
+ pg_track_optimizer_reset 
+--------------------------
+                       12
 (1 row)
 
 DROP EXTENSION pg_track_optimizer;

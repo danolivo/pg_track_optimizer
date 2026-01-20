@@ -180,7 +180,6 @@ The `RStats` type is a custom PostgreSQL type for tracking running statistics us
 **Fields accessible via the `->` operator:**
 - `count`: Number of observations
 - `mean`: Average value
-- `variance`: Statistical variance
 - `stddev`: Standard deviation
 - `min`: Minimum value observed
 - `max`: Maximum value observed
@@ -206,7 +205,7 @@ WHERE wca_avg > 2.0
 ORDER BY wca_avg DESC;
 ```
 
-The RStats type maintains numerically stable incremental statistics, automatically updating mean, variance, min, and max as new values are accumulated. This provides richer statistical insight than simple totals or averages, especially useful for understanding the variability in query performance and cardinality estimation across multiple executions.
+The RStats type maintains numerically stable incremental statistics, automatically updating mean, stddev, min, and max as new values are accumulated. This provides richer statistical insight than simple totals or averages, especially useful for understanding the variability in query performance and cardinality estimation across multiple executions.
 
 ### Managing Statistics
 

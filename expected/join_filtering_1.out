@@ -19,7 +19,7 @@ CREATE EXTENSION pg_track_optimizer;
 SELECT * FROM pg_track_optimizer_reset();
  pg_track_optimizer_reset 
 --------------------------
-                       16
+                        1
 (1 row)
 
 SET pg_track_optimizer.mode = 'forced';
@@ -209,4 +209,10 @@ RESET enable_mergejoin;
 RESET enable_material;
 DROP FUNCTION portable_explain_analyze;
 DROP TABLE join_inner,join_outer;
+SELECT * FROM pg_track_optimizer_reset();
+ pg_track_optimizer_reset 
+--------------------------
+                        9
+(1 row)
+
 DROP EXTENSION pg_track_optimizer;

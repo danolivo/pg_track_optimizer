@@ -144,4 +144,5 @@ RESET enable_material;
 
 DROP FUNCTION portable_explain_analyze;
 DROP TABLE join_inner,join_outer;
+SELECT * FROM pg_track_optimizer_reset();
 DROP EXTENSION pg_track_optimizer;

@@ -4,7 +4,7 @@
  *	  PostgreSQL base type for numerically stable running statistics
  *
  * This module implements the RStats type, which maintains incremental
- * statistics (count, mean, variance, min, max) using Welford's algorithm
+ * statistics (count, mean, stddev, min, max) using Welford's algorithm
  * for numerical stability. The type is fixed-size (40 bytes) with no
  * varlena header, enabling efficient storage and indexing.
  *
@@ -62,11 +62,12 @@ PG_FUNCTION_INFO_V1(rstats_init_numeric);
 PG_FUNCTION_INFO_V1(rstats_add);
 PG_FUNCTION_INFO_V1(rstats_eq);
 PG_FUNCTION_INFO_V1(rstats_get_field);
+PG_FUNCTION_INFO_V1(rstats_agg_sfunc);
 
 
 /*
  * Input function: converts text representation to internal format
- * Format: (count:N,mean:M,min:MIN,max:MAX,variance:V)
+ * Format: (count:N,mean:M,min:MIN,max:MAX,stddev:S)
  */
 Datum
 rstats_in(PG_FUNCTION_ARGS)
@@ -74,28 +75,28 @@ rstats_in(PG_FUNCTION_ARGS)
 	char   *str = PG_GETARG_CSTRING(0);
 	RStats *result;
 	int64	count;
-	double	mean, min_val, max_val, variance;
+	double	mean, min_val, max_val, stddev;
 	int		nfields;
 
 	/* Parse the input string */
-	nfields = sscanf(str, "(count:"INT64_FORMAT",mean:%lf,min:%lf,max:%lf,variance:%lf)",
-					 &count, &mean, &min_val, &max_val, &variance);
+	nfields = sscanf(str, "(count:"INT64_FORMAT",mean:%lf,min:%lf,max:%lf,stddev:%lf)",
+					 &count, &mean, &min_val, &max_val, &stddev);
 
 	if (nfields != 5)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid input syntax for type rstats: \"%s\"", str),
-				 errhint("Expected format: (count:N,mean:M,min:MIN,max:MAX,variance:V)")));
+				 errhint("Expected format: (count:N,mean:M,min:MIN,max:MAX,stddev:S)")));
 
 	if (count < 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("count must be non-negative")));
 
-	if (variance < 0.0)
+	if (stddev < 0.0)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
-				 errmsg("variance must be non-negative")));
+				 errmsg("stddev must be non-negative")));
 
 	if (count > 0 && min_val > max_val)
 		ereport(ERROR,
@@ -109,12 +110,12 @@ rstats_in(PG_FUNCTION_ARGS)
 	 */
 	if (count == 0)
 	{
-		if (mean != 0.0 || min_val != 0.0 || max_val != 0.0 || variance != 0.0)
+		if (mean != 0.0 || min_val != 0.0 || max_val != 0.0 || stddev != 0.0)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 					 errmsg("RStats with count=0 must have all zero fields"),
-					 errdetail("Got: mean=%g, min=%g, max=%g, variance=%g",
-							   mean, min_val, max_val, variance)));
+					 errdetail("Got: mean=%g, min=%g, max=%g, stddev=%g",
+							   mean, min_val, max_val, stddev)));
 	}
 
 	/* Allocate and initialize the result */
@@ -125,9 +126,9 @@ rstats_in(PG_FUNCTION_ARGS)
 	result->min = min_val;
 	result->max = max_val;
 
-	/* Convert variance to m2 (sum of squared differences) */
+	/* Convert stddev to m2 (sum of squared differences): m2 = stddev^2 * (n-1) */
 	if (count > 1)
-		result->m2 = variance * (count - 1);
+		result->m2 = stddev * stddev * (count - 1);
 	else
 		result->m2 = 0.0;
 
@@ -142,16 +143,16 @@ rstats_out(PG_FUNCTION_ARGS)
 {
 	RStats *stats = PG_GETARG_RSTATS_P(0);
 	char   *result;
-	double	variance;
+	double	stddev;
 
-	/* Calculate variance from m2 */
+	/* Calculate stddev from m2 */
 	if (stats->count > 1)
-		variance = stats->m2 / (stats->count - 1);
+		stddev = sqrt(stats->m2 / (stats->count - 1));
 	else
-		variance = 0.0;
+		stddev = 0.0;
 
-	result = psprintf("(count:"INT64_FORMAT",mean:%.15g,min:%.15g,max:%.15g,variance:%.15g)",
-					  stats->count, stats->mean, stats->min, stats->max, variance);
+	result = psprintf("(count:"INT64_FORMAT",mean:%.15g,min:%.15g,max:%.15g,stddev:%.15g)",
+					  stats->count, stats->mean, stats->min, stats->max, stddev);
 
 	PG_RETURN_CSTRING(result);
 }
@@ -255,7 +256,7 @@ rstats_send(PG_FUNCTION_ARGS)
  * fields to 0.0 for consistency and to ensure clean serialization:
  * 1. Provides a canonical empty representation across text/binary formats
  * 2. Allows rstats_is_empty() to verify structural integrity
- * 3. Ensures empty state displays cleanly: (count:0,mean:0,min:0,max:0,variance:0)
+ * 3. Ensures empty state displays cleanly: (count:0,mean:0,min:0,max:0,stddev:0)
  * 4. Prevents confusion with legitimate statistics that happen to have zero values
  *
  * Note: This means we cannot distinguish between truly empty stats and stats
@@ -426,7 +427,7 @@ rstats_init_internal(RStats *result, double value)
 
 	result->count = 1;
 	result->mean = value;
-	result->m2 = 0.0;	  /* No variance with single value */
+	result->m2 = 0.0;	  /* No stddev with single value */
 	result->min = value;
 	result->max = value;
 }
@@ -494,7 +495,7 @@ rstats_add_value(RStats *rstats, double value)
 		return;
 	}
 
-	/* Welford's algorithm for incremental mean and variance */
+	/* Welford's algorithm for incremental mean and stddev */
 	new_count = rstats->count + 1;
 	delta = value - rstats->mean;
 
@@ -552,7 +553,7 @@ rstats_add(PG_FUNCTION_ARGS)
  * - Use cases: caching, deduplication, identity checks in hash tables
  *
  * For numerical similarity testing, users should compare extracted statistics
- * using appropriate epsilon tolerances on mean, variance, etc.
+ * using appropriate epsilon tolerances on mean, stddev, etc.
  */
 Datum
 rstats_eq(PG_FUNCTION_ARGS)
@@ -582,7 +583,7 @@ rstats_eq(PG_FUNCTION_ARGS)
 /*
  * Field accessor using -> operator
  * Allows accessing statistics fields like: stats -> 'mean'
- * Supported fields: count, mean, variance, stddev, min, max
+ * Supported fields: count, mean, stddev, min, max
  */
 Datum
 rstats_get_field(PG_FUNCTION_ARGS)
@@ -604,20 +605,10 @@ rstats_get_field(PG_FUNCTION_ARGS)
 	{
 		result = stats->mean;
 	}
-	else if (strcmp(field_name, "variance") == 0)
-	{
-		if (stats->count > 1)
-			result = stats->m2 / (stats->count - 1);
-		else
-			result = 0.0;
-	}
 	else if (strcmp(field_name, "stddev") == 0)
 	{
 		if (stats->count > 1)
-		{
-			double variance = stats->m2 / (stats->count - 1);
-			result = sqrt(variance);
-		}
+			result = sqrt(stats->m2 / (stats->count - 1));
 		else
 			result = 0.0;
 	}
@@ -634,9 +625,58 @@ rstats_get_field(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("invalid field name for statistics type: \"%s\"", field_name),
-				 errhint("Valid field names are: count, mean, variance, stddev, min, max")));
+				 errhint("Valid field names are: count, mean, stddev, min, max")));
 	}
 
 	pfree(field_name);
 	PG_RETURN_FLOAT8(result);
+}
+
+/*
+ * Aggregate state transition function for rstats_agg
+ *
+ * This function accumulates double precision values into an rstats object.
+ * It handles NULL state (first call) by creating a new rstats initialized
+ * with the first value.
+ *
+ * Usage: SELECT rstats_agg(column) FROM table GROUP BY grouping_column;
+ */
+Datum
+rstats_agg_sfunc(PG_FUNCTION_ARGS)
+{
+	MemoryContext	aggcontext;
+	RStats		   *state;
+	double			value;
+
+	if (!AggCheckCallContext(fcinfo, &aggcontext))
+		elog(ERROR, "rstats_agg_sfunc called in non-aggregate context");
+
+	/* Skip NULL input values */
+	if (PG_ARGISNULL(1))
+	{
+		if (PG_ARGISNULL(0))
+			PG_RETURN_NULL();
+		PG_RETURN_DATUM(PG_GETARG_DATUM(0));
+	}
+
+	value = PG_GETARG_FLOAT8(1);
+
+	if (PG_ARGISNULL(0))
+	{
+		/* First non-NULL value: allocate state in aggregate context */
+		MemoryContext oldcontext = MemoryContextSwitchTo(aggcontext);
+
+		state = (RStats *) palloc(sizeof(RStats));
+		rstats_init_internal(state, value);
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+	else
+	{
+		/* Add value to existing state */
+		state = PG_GETARG_RSTATS_P(0);
+		rstats_add_value(state, value);
+	}
+
+	PG_RETURN_RSTATS_P(state);
 }
