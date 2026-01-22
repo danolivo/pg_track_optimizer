@@ -53,6 +53,7 @@ PG_MODULE_MAGIC_EXT(
 typedef struct TODSMRegistry
 {
 	LWLock				lock;
+	int					tranche_id;
 	dshash_table	   *htab;
 	dsa_handle			dsah;
 	dshash_table_handle	dshh;
@@ -195,7 +196,6 @@ to_init_shmem(void *ptr, void *arg)
 #endif
 {
 	TODSMRegistry	   *state = (TODSMRegistry *) ptr;
-	int					tranche_id; /* dshash tranche */
 
 	Assert(htab_dsa == NULL && htab == NULL);
 
@@ -206,9 +206,9 @@ to_init_shmem(void *ptr, void *arg)
 #else
 	LWLockInitialize(&state->lock,
 					 LWLockNewTrancheId("pgto_lock_tranche"));
-	tranche_id = LWLockNewTrancheId("pgto_dshash_tranche");
+	state->tranche_id = LWLockNewTrancheId("pgto_dshash_tranche");
 #endif
-	htab_dsa = dsa_create(tranche_id);
+	htab_dsa = dsa_create(state->tranche_id);
 	state->dsah = dsa_get_handle(htab_dsa);
 	dsa_pin(htab_dsa);
 
@@ -926,9 +926,21 @@ error:
 static void
 recreate_htab(TODSMRegistry *state)
 {
-	dshash_destroy(htab);
+	if (htab)
+		dshash_destroy(htab);
+	if (htab_dsa)
+	{
+		dsa_unpin(htab_dsa);
+		dsa_detach(htab_dsa);
+	}
+
+	htab_dsa = dsa_create(state->tranche_id);
+	dsa_pin(htab_dsa);
 	htab = dshash_create(htab_dsa, &dsh_params, 0);
+	state->dsah = dsa_get_handle(htab_dsa);
 	state->dshh = dshash_get_hash_table_handle(htab);
+	pg_atomic_init_u32(&state->htab_counter, 0);
+	pg_atomic_init_u32(&state->need_syncing, 0);
 }
 
 /*
