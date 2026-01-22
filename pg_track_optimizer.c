@@ -419,6 +419,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		rstats_set_empty(&entry->f_join_filter);
 		rstats_set_empty(&entry->f_scan_filter);
 		rstats_set_empty(&entry->f_worst_splan);
+		rstats_set_empty(&entry->njoins);
 
 		entry->nexecs = 0;
 
@@ -910,6 +911,7 @@ _flush_hash_table(void)
 	 * temporary file.
 	 */
 error:
+	FileClose(file);
 	unlink(tmpfile);
 
 	ereport(ERROR,
@@ -1244,10 +1246,7 @@ pto_before_shmem_exit(int code, Datum arg)
 
 	/* On the backend shutdown flush the data only if something new arrived */
 	if (pg_atomic_read_u32(&shared->need_syncing) == 0)
-	{
-		LWLockRelease(&shared->lock);
 		return;
-	}
 
 	elog(DEBUG1, "[%s] saving hash table to the disk", EXTENSION_NAME);
 
