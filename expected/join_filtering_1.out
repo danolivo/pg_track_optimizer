@@ -114,7 +114,8 @@ SELECT
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%portable_explain_analyze%' AND
-  query NOT LIKE '%pg_track_optimizer%';
+  query NOT LIKE '%pg_track_optimizer%'
+ORDER BY err,en,pn;
  err  | jf_max | lf_max | en | pn | nex 
 ------+--------+--------+----+----+-----
  0.00 |      0 |      0 |  4 |  4 |   1
@@ -139,7 +140,8 @@ SELECT
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%portable_explain_analyze%' AND
-  query NOT LIKE '%pg_track_optimizer%';
+  query NOT LIKE '%pg_track_optimizer%'
+ORDER BY err,en,pn;
  err  | jf_max | lf_max | en | pn | nex 
 ------+--------+--------+----+----+-----
  0.00 |      0 |      0 |  4 |  4 |   1
@@ -169,7 +171,8 @@ SELECT
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%portable_explain_analyze%' AND
-  query NOT LIKE '%pg_track_optimizer%';
+  query NOT LIKE '%pg_track_optimizer%'
+ORDER BY err,en,pn;
  err  | jf_max | lf_max | en | pn | nex 
 ------+--------+--------+----+----+-----
  0.29 |      0 |      0 |  4 |  4 |   2
