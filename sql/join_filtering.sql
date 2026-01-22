@@ -96,7 +96,8 @@ SELECT
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%portable_explain_analyze%' AND
-  query NOT LIKE '%pg_track_optimizer%';
+  query NOT LIKE '%pg_track_optimizer%'
+ORDER BY err,en,pn;
 
 SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id) LIMIT 1;');
 
@@ -107,7 +108,8 @@ SELECT
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%portable_explain_analyze%' AND
-  query NOT LIKE '%pg_track_optimizer%';
+  query NOT LIKE '%pg_track_optimizer%'
+ORDER BY err,en,pn;
 
 CREATE INDEX join_outer_id_idx ON join_outer (id);
 -- Second pass: only MergeJoin runtime optimisation detects an estimation error
@@ -122,7 +124,8 @@ SELECT
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
   query NOT LIKE '%portable_explain_analyze%' AND
-  query NOT LIKE '%pg_track_optimizer%';
+  query NOT LIKE '%pg_track_optimizer%'
+ORDER BY err,en,pn;
 
 DROP INDEX join_outer_id_idx;
 TRUNCATE join_inner;
