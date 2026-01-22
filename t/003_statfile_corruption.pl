@@ -43,6 +43,10 @@ $node->safe_psql('postgres',
 	qq(ALTER SYSTEM SET pg_track_optimizer.mode = 'disabled'));
 $node->safe_psql('postgres', 'SELECT pg_reload_conf()');
 
+# Wait for any in-flight queries to complete to avoid race conditions
+# This prevents a backend from updating HTAB after tracking is disabled
+$node->safe_psql('postgres', 'SELECT pg_sleep(0.1)');
+
 # Save number of records before the flush
 my $before_flush = $node->safe_psql('postgres',
 	'SELECT COUNT(*), SUM(nexecs) FROM pg_track_optimizer;');
@@ -116,7 +120,47 @@ like($log_content, qr/has incorrect CRC32C checksum/,
 # The corrupted file should have been rejected
 pass('Checksum validation correctly detected file corruption');
 
+# Verify the system can recover after corruption
+# This tests that the atomic counter was properly reset to 0
+note("Testing recovery: flush new data and verify it can be loaded");
+
+# Re-enable tracking
+$node->safe_psql('postgres',
+	qq(ALTER SYSTEM SET pg_track_optimizer.mode = 'forced'));
+$node->safe_psql('postgres', 'SELECT pg_reload_conf()');
+
+# Execute a new query to generate fresh tracking data
+$node->safe_psql('postgres', 'SELECT * FROM checksum_test WHERE x = 42;');
+
+# Disable tracking again
+$node->safe_psql('postgres',
+	qq(ALTER SYSTEM SET pg_track_optimizer.mode = 'disabled'));
+$node->safe_psql('postgres', 'SELECT pg_reload_conf()');
+
+# Verify we have data in the hash table
+my $count_before_recovery_flush = $node->safe_psql('postgres',
+	'SELECT COUNT(*) FROM pg_track_optimizer;');
+ok($count_before_recovery_flush > 0, 'Hash table contains data after corruption recovery');
+
+# Flush the new data - this overwrites the corrupted file
+$node->safe_psql('postgres', 'SELECT pg_track_optimizer_flush();');
+
+# Restart and verify the new data can be loaded
+note("Restarting to verify new data loads successfully");
+$node->restart;
+
+# Load should succeed now with the new uncorrupted file
+my $count_after_reload = $node->safe_psql('postgres',
+	'SELECT COUNT(*) FROM pg_track_optimizer;');
+is($count_after_reload, $count_before_recovery_flush,
+   'New data loads successfully after corruption recovery - atomic counter was properly reset');
+
+# Verify no checksum error in logs this time
+my $final_log = slurp_file($node->logfile);
+my $error_count = () = $final_log =~ /has incorrect CRC32C checksum/g;
+is($error_count, 1, 'Only the original corruption was logged, not the recovery');
+
 # Note: The server handles corruption gracefully with a WARNING and continues running.
-# The test framework will shut it down automatically when done_testing() is called.
+# After recovery, normal operation resumes and new data can be flushed and loaded.
 
 done_testing();
