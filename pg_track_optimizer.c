@@ -201,8 +201,8 @@ to_init_shmem(void *ptr, void *arg)
 
 #if PG_VERSION_NUM < 190000
 	LWLockInitialize(&state->lock, LWLockNewTrancheId());
-	tranche_id = LWLockNewTrancheId();
-	LWLockRegisterTranche(tranche_id, "pgto_dshash_tranche");
+	state->tranche_id = LWLockNewTrancheId();
+	LWLockRegisterTranche(state->tranche_id, "pgto_dshash_tranche");
 #else
 	LWLockInitialize(&state->lock,
 					 LWLockNewTrancheId("pgto_lock_tranche"));
