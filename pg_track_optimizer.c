@@ -167,7 +167,7 @@ static bool auto_flush = true;
 
 void _PG_init(void);
 
-static bool _load_hash_table(TODSMRegistry *state);
+static uint32 _load_hash_table_safe(TODSMRegistry *state);
 static uint32 _flush_hash_table(void);
 static void pto_before_shmem_exit(int code, Datum arg);
 
@@ -217,7 +217,7 @@ to_init_shmem(void *ptr, void *arg)
 	pg_atomic_init_u32(&state->htab_counter, 0);
 	pg_atomic_init_u32(&state->need_syncing, 0);
 
-	(void) _load_hash_table(state);
+	_load_hash_table_safe(state);
 }
 
 /*
@@ -923,6 +923,14 @@ error:
 	return -1;
 }
 
+static void
+recreate_htab(TODSMRegistry *state)
+{
+	dshash_destroy(htab);
+	htab = dshash_create(htab_dsa, &dsh_params, 0);
+	state->dshh = dshash_get_hash_table_handle(htab);
+}
+
 /*
  * Read data file record by record and add each record into the new table.
  * Provide reference to the shared area because the local pointer is still not
@@ -936,7 +944,7 @@ error:
  * dbOid=InvalidOid). After the EOF marker, a stored record count is read
  * for verification.
  */
-static bool
+static uint32
 _load_hash_table(TODSMRegistry *state)
 {
 	File						file;
@@ -955,7 +963,6 @@ _load_hash_table(TODSMRegistry *state)
 
 	if (shared != NULL)
 	{
-		Assert(shared == NULL);
 		elog(WARNING,
 			 "[%s] unexpected state of shared memory; data not loaded",
 			 EXTENSION_NAME);
@@ -981,7 +988,7 @@ _load_hash_table(TODSMRegistry *state)
 		if (errno != ENOENT)
 			goto read_error;
 		/* File does not exist */
-		return false;
+		return -1;
 	}
 
 	/* Initialize CRC32C checksum computation */
@@ -1026,6 +1033,8 @@ _load_hash_table(TODSMRegistry *state)
 			 EXTENSION_NAME, filename),
 			 errdetail("skip data file load for safety"),
 			 errhint("remove the file manually or reset statistics in advance")));
+
+		/* No entries yet added to HTAB. simple exit path */
 		goto end;
 	}
 	COMP_CRC32C(crc, ver_str, verstr_len);
@@ -1137,7 +1146,7 @@ _load_hash_table(TODSMRegistry *state)
 			 EXTENSION_NAME, filename),
 			 errdetail("Read %u records, but file claims %u", counter, stored_nrecs),
 			 errhint("File may be corrupted")));
-		goto reset_end;
+		goto soft_failed_end;
 	}
 
 	/*
@@ -1158,9 +1167,9 @@ _load_hash_table(TODSMRegistry *state)
 			(errcode(ERRCODE_DATA_CORRUPTED),
 			 errmsg("[%s] file \"%s\" has incorrect CRC32C checksum",
 			 EXTENSION_NAME, filename),
-			 errdetail("Expected %08X, found %08X", crc, stored_crc),
+			 errdetail("Expected %08X, found %08X", stored_crc, crc),
 			 errhint("File is corrupted - skipping load for safety")));
-		goto reset_end;
+		goto soft_failed_end;
 	}
 
 	/*
@@ -1181,8 +1190,9 @@ _load_hash_table(TODSMRegistry *state)
 	pg_atomic_write_u32(&state->htab_counter, counter);
 	elog(LOG, "[%s] %u records loaded from file \"%s\"",
 		 EXTENSION_NAME, counter, filename);
-	return true;
+	return counter;
 
+/* Upper TRY/CATCH section must guarantee HTAB cleanup on ERROR */
 read_error:
 	ereport(ERROR,
 			(errcode_for_file_access(),
@@ -1211,13 +1221,31 @@ crc_read_error:
 			 EXTENSION_NAME, filename),
 			 errdetail("File may be truncated or corrupted"),
 			 errhint("Remove the file manually or reset statistics in advance")));
-reset_end:
-	reset_htab();
+soft_failed_end:
+	recreate_htab(state);
 end:
 	if (file >= 0)
 		FileClose(file);
 
-	return false;
+	return -1;
+}
+
+static uint32
+_load_hash_table_safe(TODSMRegistry *state)
+{
+	volatile uint32 nrecs = -1;
+	PG_TRY();
+	{
+		nrecs = _load_hash_table(state);
+	}
+	PG_CATCH();
+	{
+		recreate_htab(state);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	return nrecs;
 }
 
 Datum
