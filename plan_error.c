@@ -93,7 +93,7 @@ prediction_walker(PlanState *pstate, void *context)
 			 * Higher values indicate subplans that consume significant time
 			 * and execute many loops - prime candidates for JOIN conversion.
 			 */
-			if (cost_factor >= ctx->f_worst_splan || cost_factor < 0)
+			if (cost_factor > ctx->f_worst_splan)
 				ctx->f_worst_splan = cost_factor;
 		}
 	}

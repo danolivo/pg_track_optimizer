@@ -185,11 +185,9 @@ SubPlans are likely a major performance bottleneck. Optimization strategies:
 
 1. **InitPlans**: SubPlans with `setParam != NIL` execute once before the main query. These are not currently tracked separately but would show `nloops = 1`.
 
-2. **Overflow**: Very high values can overflow to negative infinity. The code preserves negative values as evidence of extreme cost.
+2. **Parallel Workers**: Current implementation asserts `sps->worker_instrument == NULL`, meaning SubPlans don't parallelize (as expected - they're parallel-restricted).
 
-3. **Parallel Workers**: Current implementation asserts `sps->worker_instrument == NULL`, meaning SubPlans don't parallelize (as expected - they're parallel-restricted).
-
-4. **No SubPlans**: Queries without SubPlans have `f_worst_splan = 0.0`.
+3. **No SubPlans**: Queries without SubPlans have `f_worst_splan = 0.0`.
 
 ## Testing
 
