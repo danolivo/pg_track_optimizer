@@ -680,3 +680,43 @@ rstats_agg_sfunc(PG_FUNCTION_ARGS)
 
 	PG_RETURN_RSTATS_P(state);
 }
+
+/*
+ * Calculate Mahalanobis distance between two RStats
+ * Returns distance value (0 = identical, higher = more different)
+ */
+PG_FUNCTION_INFO_V1(rstats_distance);
+Datum
+rstats_distance(PG_FUNCTION_ARGS)
+{
+	RStats *stats1 = PG_GETARG_RSTATS_P(0);
+	RStats *stats2 = PG_GETARG_RSTATS_P(1);
+	double	variance1, variance2;
+	double	mean_diff, pooled_var;
+	double	distance;
+
+	/* Need at least 2 samples for variance */
+	if (stats1->count < 2 || stats2->count < 2)
+		PG_RETURN_FLOAT8(INFINITY);
+
+	/* Calculate variances using Welford's m2 */
+	variance1 = stats1->m2 / (stats1->count - 1);
+	variance2 = stats2->m2 / (stats2->count - 1);
+
+	mean_diff = stats1->mean - stats2->mean;
+	pooled_var = (variance1 / stats1->count) + (variance2 / stats2->count);
+
+	/* Handle constant distributions */
+	if (pooled_var == 0.0)
+	{
+		if (mean_diff == 0.0)
+			PG_RETURN_FLOAT8(0.0);
+		else
+			PG_RETURN_FLOAT8(INFINITY);
+	}
+
+	/* Mahalanobis distance squared (follows chi-squared distribution with df=1) */
+	distance = sqrt((mean_diff * mean_diff) / pooled_var);
+
+	PG_RETURN_FLOAT8(distance);
+}

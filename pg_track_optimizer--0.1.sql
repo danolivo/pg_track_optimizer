@@ -187,6 +187,21 @@ CREATE AGGREGATE rstats_agg(double precision) (
 COMMENT ON AGGREGATE rstats_agg(double precision)
   IS 'Aggregate function that collects values and computes running statistics';
 
+CREATE FUNCTION rstats_distance(rstats, rstats)
+RETURNS float8
+AS 'MODULE_PATHNAME', 'rstats_distance'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE OPERATOR <-> (
+    LEFTARG = rstats,
+    RIGHTARG = rstats,
+    FUNCTION = rstats_distance,
+    COMMUTATOR = <->
+);
+
+COMMENT ON OPERATOR <-> (rstats, rstats) IS
+'Mahalanobis distance between two statistical distributions (lower = more similar)';
+
 /* *****************************************************************************
  *
  * The pg_track_optimizer's UI objects is defined here

@@ -213,6 +213,118 @@ SELECT rstats_agg(val) FROM agg_test WHERE grp <= 2;
 
 DROP TABLE agg_test;
 
+-- Distance operator <-> tests
+-- The <-> operator calculates Mahalanobis distance between two distributions
+
+-- Identical distributions should have distance 0
+SELECT ROUND((
+    (rstats_agg(val) <-> rstats_agg(val))::numeric
+), 2) as identical_distance
+FROM (VALUES (10.0), (20.0), (30.0)) AS t(val);
+
+-- Very similar distributions (small distance)
+-- Distribution 1: mean=20, values around 20
+-- Distribution 2: mean=21, values around 21 (slightly shifted)
+WITH dist1 AS (
+    SELECT rstats_agg(val) as stats
+    FROM (VALUES (18.0), (20.0), (22.0), (19.0), (21.0)) AS t(val)
+),
+dist2 AS (
+    SELECT rstats_agg(val) as stats
+    FROM (VALUES (19.0), (21.0), (23.0), (20.0), (22.0)) AS t(val)
+)
+SELECT ROUND((d1.stats <-> d2.stats)::numeric, 4) as similar_distance
+FROM dist1 d1, dist2 d2;
+
+-- Very different distributions (large distance)
+-- Distribution 1: mean=10, low values
+-- Distribution 2: mean=100, high values
+WITH dist1 AS (
+    SELECT rstats_agg(val) as stats
+    FROM (VALUES (8.0), (10.0), (12.0), (9.0), (11.0)) AS t(val)
+),
+dist2 AS (
+    SELECT rstats_agg(val) as stats
+    FROM (VALUES (98.0), (100.0), (102.0), (99.0), (101.0)) AS t(val)
+)
+SELECT ROUND((d1.stats <-> d2.stats)::numeric, 2) as different_distance
+FROM dist1 d1, dist2 d2;
+
+-- Distributions with different variances
+-- Distribution 1: tight (low variance)
+-- Distribution 2: spread (high variance)
+WITH tight_dist AS (
+    SELECT rstats_agg(val) as stats
+    FROM (VALUES (50.0), (50.5), (49.5), (50.2), (49.8)) AS t(val)
+),
+spread_dist AS (
+    SELECT rstats_agg(val) as stats
+    FROM (VALUES (30.0), (50.0), (70.0), (40.0), (60.0)) AS t(val)
+)
+SELECT ROUND((t.stats <-> s.stats)::numeric, 4) as variance_distance
+FROM tight_dist t, spread_dist s;
+
+-- Edge case - insufficient samples (count < 2)
+-- Should return INFINITY
+SELECT (rstats(42.0) <-> rstats(50.0)) as insufficient_samples;
+
+-- Edge case - constant distributions (zero variance)
+-- Same constant: distance = 0
+-- Different constants: distance = INFINITY
+SELECT
+    ROUND(((rstats(10.0) + 10.0 + 10.0) <-> (rstats(10.0) + 10.0 + 10.0))::numeric, 2)
+        as same_constant,
+    ((rstats(10.0) + 10.0 + 10.0) <-> (rstats(20.0) + 20.0 + 20.0))
+        as different_constants;
+
+-- Real-world scenario - comparing query execution statistics
+-- Simulate two executions of similar queries with slightly different characteristics
+CREATE TABLE query_stats (
+    query_id int,
+    execution_time double precision
+);
+
+INSERT INTO query_stats VALUES
+    (1, 95.0), (1, 100.0), (1, 105.0), (1, 98.0), (1, 102.0),
+    (1, 99.0), (1, 101.0), (1, 97.0), (1, 103.0), (1, 100.0);
+
+INSERT INTO query_stats VALUES
+    (2, 105.0), (2, 110.0), (2, 115.0), (2, 108.0), (2, 112.0),
+    (2, 109.0), (2, 111.0), (2, 107.0), (2, 113.0), (2, 110.0);
+
+INSERT INTO query_stats VALUES
+    (3, 480.0), (3, 500.0), (3, 520.0), (3, 490.0), (3, 510.0),
+    (3, 495.0), (3, 505.0), (3, 485.0), (3, 515.0), (3, 500.0);
+
+-- Compare execution time distributions
+SELECT
+    q1.query_id as query1,
+    q2.query_id as query2,
+    ROUND((rstats_agg(q1.execution_time) <-> rstats_agg(q2.execution_time))::numeric, 4)
+        as distance
+FROM query_stats q1, query_stats q2
+WHERE q1.query_id < q2.query_id
+GROUP BY q1.query_id, q2.query_id
+ORDER BY q1.query_id, q2.query_id;
+
+-- Using distance for finding similar query patterns
+-- Find queries with similar execution time patterns (distance < 5.0)
+WITH stats_by_query AS (
+    SELECT query_id, rstats_agg(execution_time) as stats
+    FROM query_stats
+    GROUP BY query_id
+)
+SELECT
+    s1.query_id as query1,
+    s2.query_id as query2,
+    ROUND((s1.stats <-> s2.stats)::numeric, 4) as distance
+FROM stats_by_query s1, stats_by_query s2
+WHERE s1.query_id < s2.query_id
+  AND (s1.stats <-> s2.stats) < 5.0
+ORDER BY distance;
+
+DROP TABLE query_stats;
+
 -- Clean up
 DROP TABLE sensor_data,tmp;
 SELECT * FROM pg_track_optimizer_reset();
