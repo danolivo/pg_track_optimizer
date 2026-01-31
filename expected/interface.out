@@ -1,4 +1,17 @@
 CREATE EXTENSION pg_track_optimizer;
+SELECT * FROM pg_track_optimizer_reset();
+ pg_track_optimizer_reset 
+--------------------------
+                        1
+(1 row)
+
+SELECT mode,entries_left,is_synced
+FROM pg_track_optimizer_status;
+  mode  | entries_left | is_synced 
+--------+--------------+-----------
+ forced |         8737 | f
+(1 row)
+
 \d pg_track_optimizer
                   View "public.pg_track_optimizer"
      Column      |       Type       | Collation | Nullable | Default 
@@ -73,30 +86,23 @@ CREATE EXTENSION pg_track_optimizer;
 
 \df pg_track_optimizer_reset
                                  List of functions
- Schema |           Name           | Result data type | Argument data types | Type
+ Schema |           Name           | Result data type | Argument data types | Type 
 --------+--------------------------+------------------+---------------------+------
  public | pg_track_optimizer_reset | integer          |                     | func
 (1 row)
 
 \d pg_track_optimizer_status
-        View "public.pg_track_optimizer_status"
-    Column     |  Type   | Collation | Nullable | Default
----------------+---------+-----------+----------+---------
- mode          | text    |           |          |
- entries_count | integer |           |          |
- entries_max   | integer |           |          |
- is_synced     | boolean |           |          |
+         View "public.pg_track_optimizer_status"
+    Column    |  Type   | Collation | Nullable | Default 
+--------------+---------+-----------+----------+---------
+ mode         | text    |           |          | 
+ entries_left | integer |           |          | 
+ is_synced    | boolean |           |          | 
 
 SELECT * FROM pg_track_optimizer_reset();
- pg_track_optimizer_reset
+ pg_track_optimizer_reset 
 --------------------------
-                        5
-(1 row)
-
-SELECT mode, entries_count >= 0 AS has_count, entries_max > 0 AS has_max, is_synced FROM pg_track_optimizer_status;
-   mode   | has_count | has_max | is_synced
-----------+-----------+---------+-----------
- disabled | t         | t       | t
+                        6
 (1 row)
 
 DROP EXTENSION pg_track_optimizer;

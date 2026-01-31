@@ -606,8 +606,8 @@ Datum
 pg_track_optimizer_status(PG_FUNCTION_ARGS)
 {
 	TupleDesc	tupdesc;
-	Datum		values[4];
-	bool		nulls[4];
+	Datum		values[3];
+	bool		nulls[3];
 	HeapTuple	tuple;
 	const char *mode_str;
 	uint32		entries_count;
@@ -626,8 +626,10 @@ pg_track_optimizer_status(PG_FUNCTION_ARGS)
 			mode_str = "forced";
 			break;
 		case TRACK_MODE_DISABLED:
-		default:
 			mode_str = "disabled";
+			break;
+		default:
+			elog(ERROR, "unexpected mode value %d", track_mode);
 			break;
 	}
 
@@ -646,9 +648,8 @@ pg_track_optimizer_status(PG_FUNCTION_ARGS)
 
 	memset(nulls, 0, sizeof(nulls));
 	values[0] = CStringGetTextDatum(mode_str);
-	values[1] = UInt32GetDatum(entries_count);
-	values[2] = UInt32GetDatum(entries_max);
-	values[3] = BoolGetDatum(is_synced);
+	values[1] = UInt32GetDatum(entries_max - entries_count);
+	values[2] = BoolGetDatum(is_synced);
 
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 
