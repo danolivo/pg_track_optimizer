@@ -7,6 +7,8 @@ A lightweight PostgreSQL extension for detecting suboptimal query plans by analy
 
 **Compatible with PostgreSQL 17 and above.**
 
+> **📢 We will provide backward compatibility guarantees and upgrade scripts** as soon as the first deployment is reported. If you're using this extension in production, please [open an issue](https://github.com/danolivo/pg_track_optimizer/issues) to let us know — your feedback will shape our stability commitments.
+
 ## Overview
 
 PostgreSQL's query planner makes sophisticated predictions about row counts, selectivity, and execution costs to choose optimal query plans. However, these predictions may be incorrect due to outdated statistics, data skew, correlation, or complex predicates. As a result, the planner may choose suboptimal execution strategies.
