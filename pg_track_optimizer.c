@@ -375,7 +375,12 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	counter = pg_atomic_read_u32(&shared->htab_counter);
 	if (counter == UINT32_MAX || counter > hashtable_elements_max())
 	{
-		/* TODO: set status of full hash table */
+		/*
+		 * Silently ignore new entries when hash table is full. Logging here
+		 * would quickly overfill log files under high transaction rates
+		 * (thousands per second). Users should monitor hash table capacity
+		 * via pg_track_optimizer_status() instead.
+		 */
 		return false;
 	}
 
@@ -656,6 +661,13 @@ pg_track_optimizer_status(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(HeapTupleGetDatum(tuple));
 }
 
+/*
+ * Return all tracked query statistics for the current database.
+ *
+ * Access control for this view is intentionally left to the DBA (e.g., via
+ * GRANT/REVOKE on the function or view). This keeps the extension lightweight
+ * and simple, avoiding the overhead of per-row visibility checks.
+ */
 Datum
 pg_track_optimizer(PG_FUNCTION_ARGS)
 {
@@ -786,6 +798,11 @@ reset_htab()
 Datum
 to_reset(PG_FUNCTION_ARGS)
 {
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("must be superuser to reset pg_track_optimizer statistics")));
+
 	PG_RETURN_UINT32(reset_htab());
 }
 
@@ -1322,6 +1339,11 @@ Datum
 to_flush(PG_FUNCTION_ARGS)
 {
 	uint32 counter;
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("must be superuser to flush pg_track_optimizer statistics")));
 
 	track_attach_shmem();
 

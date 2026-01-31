@@ -207,6 +207,8 @@ ORDER BY wca_avg DESC;
 
 The RStats type maintains numerically stable incremental statistics, automatically updating mean, stddev, min, and max as new values are accumulated. This provides richer statistical insight than simple totals or averages, especially useful for understanding the variability in query performance and cardinality estimation across multiple executions.
 
+For detailed documentation of the RStats type including all operators (`+`, `=`, `<->`), aggregate functions, casts, and design decisions, see [rstats.md](rstats.md).
+
 ### Managing Statistics
 
 ```sql
@@ -218,6 +220,34 @@ SELECT pg_track_optimizer_reset();
 ```
 
 Statistics persist in shared memory until `pg_track_optimizer_reset()` is called or PostgreSQL restarts. Use `pg_track_optimizer_flush()` to save snapshots for historical analysis.
+
+> **Note**: Both `pg_track_optimizer_flush()` and `pg_track_optimizer_reset()` require superuser privileges.
+
+### Checking Extension Status
+
+Use `pg_track_optimizer_status()` or the `pg_track_optimizer_status` view to monitor the extension state:
+
+```sql
+SELECT * FROM pg_track_optimizer_status;
+```
+
+**Example output:**
+```
+  mode  | entries_left | is_synced
+--------+--------------+-----------
+ normal |         9847 | f
+```
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `mode` | text | Current tracking mode: `disabled`, `normal`, or `forced` |
+| `entries_left` | integer | Remaining capacity in the hash table for new query entries |
+| `is_synced` | boolean | Whether current statistics have been flushed to disk (`true` = synced, `false` = pending changes) |
+
+This is useful for:
+- Verifying the extension is enabled and in the expected mode
+- Monitoring hash table capacity to avoid silent drops (when full, new queries are silently ignored)
+- Checking if statistics need to be flushed before maintenance or shutdown
 
 ## Interpreting Results
 

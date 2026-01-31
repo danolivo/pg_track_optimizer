@@ -216,6 +216,30 @@ SELECT rstats() = rstats();
 SELECT ABS((stats1 -> 'mean') - (stats2 -> 'mean')) < 0.001;
 ```
 
+### Distance Operator (<->)
+
+Calculates the Mahalanobis distance between two statistical distributions:
+
+```sql
+-- Compare two distributions
+SELECT (10::rstats + 20 + 30) <-> (15::rstats + 25 + 35);
+-- Result: small value (similar distributions)
+
+SELECT (10::rstats + 20 + 30) <-> (100::rstats + 200 + 300);
+-- Result: larger value (dissimilar distributions)
+
+-- Find queries with statistics most different from a reference
+SELECT queryid, stats <-> reference_stats AS distance
+FROM pg_track_optimizer, (SELECT 0::rstats + 1 + 2 AS reference_stats) ref
+ORDER BY distance DESC;
+```
+
+**Semantics**:
+- Returns `double precision` representing statistical distance
+- Lower values indicate more similar distributions
+- Commutative: `a <-> b` equals `b <-> a`
+- Useful for clustering queries by statistical similarity or detecting outliers
+
 ### Field Accessor Operator (->)
 
 Extracts statistical properties as double precision:
@@ -264,6 +288,37 @@ SELECT rstats(100::bigint);
 ```
 
 **Semantics**: Initializes with a single value (delegates to type-specific casts).
+
+### Aggregate Function
+
+#### rstats_agg(double precision)
+
+Aggregates multiple values into a single RStats object:
+
+```sql
+-- Aggregate values from a table column
+SELECT rstats_agg(value) FROM measurements;
+-- Result: (count:N,mean:...,min:...,max:...,stddev:...)
+
+-- Aggregate with grouping
+SELECT category, rstats_agg(price) AS price_stats
+FROM products
+GROUP BY category;
+
+-- Combine with field accessor
+SELECT
+    category,
+    rstats_agg(price) -> 'mean' AS avg_price,
+    rstats_agg(price) -> 'stddev' AS price_stddev
+FROM products
+GROUP BY category;
+```
+
+**Semantics**:
+- Collects all non-NULL values in the group into running statistics
+- Returns canonical empty state if no values are aggregated
+- Uses Welford's algorithm internally for numerical stability
+- Order of aggregation may affect floating-point rounding (typically negligible)
 
 ### References
 
