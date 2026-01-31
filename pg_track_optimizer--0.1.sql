@@ -307,3 +307,28 @@ CREATE FUNCTION pg_track_optimizer_reset()
 RETURNS integer
 AS 'MODULE_PATHNAME', 'to_reset'
 LANGUAGE C STRICT VOLATILE;
+
+/*
+ * pg_track_optimizer_status - Return current extension status.
+ *
+ * Returns:
+ *   mode          - current tracking mode ('disabled', 'normal', or 'forced')
+ *   entries_count - current number of entries in the hash table
+ *   entries_max   - maximum number of entries (based on hash_mem setting)
+ *   is_synced     - whether the hash table is synced with disk
+ */
+CREATE FUNCTION pg_track_optimizer_status(
+	OUT mode          text,
+	OUT entries_count integer,
+	OUT entries_max   integer,
+	OUT is_synced     boolean
+)
+RETURNS record
+AS 'MODULE_PATHNAME', 'pg_track_optimizer_status'
+LANGUAGE C STRICT VOLATILE;
+
+CREATE VIEW pg_track_optimizer_status AS
+  SELECT * FROM pg_track_optimizer_status();
+
+COMMENT ON VIEW pg_track_optimizer_status IS
+  'Current status of the pg_track_optimizer extension';

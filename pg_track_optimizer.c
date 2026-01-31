@@ -596,7 +596,64 @@ _PG_init(void)
  */
 
 PG_FUNCTION_INFO_V1(pg_track_optimizer);
+PG_FUNCTION_INFO_V1(pg_track_optimizer_status);
 PG_FUNCTION_INFO_V1(to_reset);
+
+/*
+ * Return the current status of the extension.
+ */
+Datum
+pg_track_optimizer_status(PG_FUNCTION_ARGS)
+{
+	TupleDesc	tupdesc;
+	Datum		values[4];
+	bool		nulls[4];
+	HeapTuple	tuple;
+	const char *mode_str;
+	uint32		entries_count;
+	uint32		entries_max;
+	bool		is_synced;
+
+	track_attach_shmem();
+
+	/* Get current mode as string */
+	switch (track_mode)
+	{
+		case TRACK_MODE_NORMAL:
+			mode_str = "normal";
+			break;
+		case TRACK_MODE_FORCED:
+			mode_str = "forced";
+			break;
+		case TRACK_MODE_DISABLED:
+		default:
+			mode_str = "disabled";
+			break;
+	}
+
+	/* Get entry counts */
+	entries_count = pg_atomic_read_u32(&shared->htab_counter);
+	entries_max = hashtable_elements_max();
+
+	/* Check sync status */
+	is_synced = (pg_atomic_read_u32(&shared->need_syncing) == 0);
+
+	/* Build tuple descriptor */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("function returning record called in context that cannot accept type record")));
+
+	memset(nulls, 0, sizeof(nulls));
+	values[0] = CStringGetTextDatum(mode_str);
+	values[1] = UInt32GetDatum(entries_count);
+	values[2] = UInt32GetDatum(entries_max);
+	values[3] = BoolGetDatum(is_synced);
+
+	tuple = heap_form_tuple(tupdesc, values, nulls);
+
+	PG_RETURN_DATUM(HeapTupleGetDatum(tuple));
+}
 
 Datum
 pg_track_optimizer(PG_FUNCTION_ARGS)
