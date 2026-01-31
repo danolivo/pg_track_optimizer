@@ -313,14 +313,12 @@ LANGUAGE C STRICT VOLATILE;
  *
  * Returns:
  *   mode          - current tracking mode ('disabled', 'normal', or 'forced')
- *   entries_count - current number of entries in the hash table
- *   entries_max   - maximum number of entries (based on hash_mem setting)
+ *   entries_left  - current number of entries to be filled
  *   is_synced     - whether the hash table is synced with disk
  */
 CREATE FUNCTION pg_track_optimizer_status(
 	OUT mode          text,
-	OUT entries_count integer,
-	OUT entries_max   integer,
+	OUT entries_left  integer,
 	OUT is_synced     boolean
 )
 RETURNS record
