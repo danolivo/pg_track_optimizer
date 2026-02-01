@@ -2,4 +2,4 @@
 comment = 'Track planning decisions in comparison with execution reality'
 module_pathname = '$libdir/pg_track_optimizer'
 relocatable = true
-default_version = '0.9'
+default_version = '0.9.1'

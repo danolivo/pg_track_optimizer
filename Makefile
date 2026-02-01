@@ -7,13 +7,15 @@ OBJS = \
 PGFILEDESC = "pg_track_optimizer - track planning decisions"
 
 EXTENSION = pg_track_optimizer
-EXTVERSION = 0.9
+EXTVERSION = 0.9.1
 
-DATA = pg_track_optimizer--0.9.sql
+DATA = pg_track_optimizer--$(EXTVERSION).sql
 
 REGRESS = pg_track_optimizer interface join_filtering rstats subplan
 
 TAP_TESTS = 1
+
+EXTRA_CLEAN = $(EXTENSION)-$(EXTVERSION).zip
 
 ifdef USE_PGXS
 EXTRA_REGRESS_OPTS=--temp-config=$(CURDIR)/pg_track_optimizer.conf
@@ -27,3 +29,10 @@ EXTRA_REGRESS_OPTS=--temp-config=$(top_srcdir)/$(subdir)/pg_track_optimizer.conf
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
+
+# Distribution target for PGXN
+dist:
+	git archive --format zip --prefix=$(EXTENSION)-$(EXTVERSION)/ \
+		--output $(EXTENSION)-$(EXTVERSION).zip HEAD
+
+.PHONY: dist

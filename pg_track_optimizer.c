@@ -44,7 +44,7 @@ PG_MODULE_MAGIC;
 #else
 PG_MODULE_MAGIC_EXT(
 					.name = "pg_track_optimizer",
-					.version = "0.9"
+					.version = "0.9.1"
 );
 #endif
 
