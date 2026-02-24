@@ -16,6 +16,7 @@
 
 #include "postgres.h"
 
+#include "access/htup_details.h"
 #include "access/parallel.h"
 #include "commands/explain.h"
 #if PG_VERSION_NUM >= 180000
