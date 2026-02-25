@@ -162,10 +162,22 @@ FROM pg_track_optimizer() WHERE query LIKE '%FROM verify_test%';
  SELECT val FROM verify_test;                                       |                 |            | 
 (1 row)
 
+-- Test the case when we prepare all the stuff for execution but never actually
+-- executed query plan (total time == 0)
+BEGIN;
+DECLARE foo1 CURSOR WITH HOLD FOR SELECT 1;
+SELECT name FROM pg_cursors ORDER BY 1;
+ name 
+------
+ foo1
+(1 row)
+
+CLOSE ALL;
+COMMIT;
 SELECT * FROM pg_track_optimizer_reset();
  pg_track_optimizer_reset 
 --------------------------
-                       12
+                       13
 (1 row)
 
 DROP EXTENSION pg_track_optimizer;

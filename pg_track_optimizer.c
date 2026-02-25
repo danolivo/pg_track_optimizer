@@ -511,14 +511,26 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	 */
 	InstrEndLoop(queryDesc->totaltime);
 
-	normalized_error = plan_error(queryDesc, &ctx);
-
 	/*
-	 * Store data in the hash table and/or print it to the log. Decision on what
-	 * to do each routine makes individually.
+	 * Check that the plan was actually executed (not just a cursor declared
+	 * and closed without fetching).  We check the root plan node's running
+	 * flag (set by InstrStopNode during ExecutorRun) or nloops (already
+	 * incremented if EXPLAIN ANALYZE called InstrEndLoop before us).
+	 * We avoid checking totaltime because ExecutorFinish always touches it,
+	 * and timer resolution can make it appear zero for trivial operations.
 	 */
-	store_data(queryDesc, &ctx);
-	_explain_statement(queryDesc, normalized_error);
+	if (queryDesc->planstate->instrument->running ||
+		queryDesc->planstate->instrument->nloops > 0)
+	{
+		normalized_error = plan_error(queryDesc, &ctx);
+
+		/*
+		 * Store data in the hash table and/or print it to the log. Decision on what
+		 * to do each routine makes individually.
+		 */
+		store_data(queryDesc, &ctx);
+		_explain_statement(queryDesc, normalized_error);
+	}
 
 	MemoryContextSwitchTo(oldcxt);
 

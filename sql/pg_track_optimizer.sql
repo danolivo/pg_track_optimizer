@@ -88,5 +88,13 @@ SELECT val FROM verify_test;
 SELECT query,evaluated_nodes,plan_nodes,nexecs
 FROM pg_track_optimizer() WHERE query LIKE '%FROM verify_test%';
 
+-- Test the case when we prepare all the stuff for execution but never actually
+-- executed query plan (total time == 0)
+BEGIN;
+DECLARE foo1 CURSOR WITH HOLD FOR SELECT 1;
+SELECT name FROM pg_cursors ORDER BY 1;
+CLOSE ALL;
+COMMIT;
+
 SELECT * FROM pg_track_optimizer_reset();
 DROP EXTENSION pg_track_optimizer;
