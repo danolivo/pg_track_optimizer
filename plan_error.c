@@ -60,7 +60,14 @@ prediction_walker(PlanState *pstate, void *context)
 			double				loop_factor;
 			double				cost_factor;
 
-			Assert(instr != NULL && sps->planstate->worker_instrument == NULL);
+			/*
+			 * TODO:
+			 * As the 5e6d8d2 says: non-correlated suplans might be executed in
+			 * parallel. So, we leave it in not totally correct form at the
+			 * moment in hope it is not very frequent case and we will have time
+			 * to fix it in the near future.
+			 */
+			Assert(instr != NULL /*&& sps->planstate->worker_instrument == NULL*/);
 
 			InstrEndLoop(instr);
 
@@ -352,11 +359,18 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	ctx->twa_error = 0.;
 	ctx->wca_error = 0.;
 #if PG_VERSION_NUM >= 190000
-	ctx->totaltime = INSTR_TIME_IS_ZERO(queryDesc->totaltime->total) ? 0.0 :
-						INSTR_TIME_GET_MILLISEC(queryDesc->totaltime->total);
+	ctx->totaltime = INSTR_TIME_GET_MILLISEC(queryDesc->totaltime->total);
 #else
 	ctx->totaltime = queryDesc->totaltime->total * 1000.;
 #endif
+
+	/*
+	 * Guard for development and production cases
+	 */
+	Assert(ctx->totaltime > 0.);
+	if (ctx->totaltime <= 0.0)
+		return -1.0;
+
 	ctx->totalcost = queryDesc->plannedstmt->planTree->total_cost;
 	ctx->nnodes = 0;
 	ctx->counter = 0;
@@ -389,7 +403,6 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	/* No subplans has been evaluated yet */
 	ctx->f_worst_splan = 0.;
 
-	Assert(ctx->totaltime > 0.);
 	(void) prediction_walker(pstate, (void *) ctx);
 
 	/* Finally, average on the number of nodes */

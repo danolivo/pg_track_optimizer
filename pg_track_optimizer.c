@@ -516,11 +516,15 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	 * and closed without fetching).  We check the root plan node's running
 	 * flag (set by InstrStopNode during ExecutorRun) or nloops (already
 	 * incremented if EXPLAIN ANALYZE called InstrEndLoop before us).
-	 * We avoid checking totaltime because ExecutorFinish always touches it,
-	 * and timer resolution can make it appear zero for trivial operations.
 	 */
-	if (queryDesc->planstate->instrument->running ||
-		queryDesc->planstate->instrument->nloops > 0)
+	if ((queryDesc->planstate->instrument->running ||
+		queryDesc->planstate->instrument->nloops > 0) &&
+#if PG_VERSION_NUM >= 190000
+		!INSTR_TIME_IS_ZERO(queryDesc->totaltime->total)
+#else
+		queryDesc->totaltime->total > 0.0
+#endif
+		)
 	{
 		normalized_error = plan_error(queryDesc, &ctx);
 
