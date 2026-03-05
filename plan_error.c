@@ -55,7 +55,6 @@ prediction_walker(PlanState *pstate, void *context)
 		foreach_node(SubPlanState, sps, pstate->subPlan)
 		{
 			Instrumentation	   *instr = sps->planstate->instrument;
-			double				nloops;
 			double				subplan_time;
 			double				loop_factor;
 			double				cost_factor;
@@ -377,24 +376,23 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	ctx->njoins = 0;
 
 	/*
-	 * Collect buffer usage statistics from this execution (summarise permanent
-	 * and temp tables blocks types).
+	 * Collect buffer usage statistics from this execution (summarise permanent,
+	 * local and temp tables blocks types).
 	 * For the sake of optimisation preciseness we don't differ blocks found in
 	 * memory and fetched from the disk - the optimiser doesn't predict that.
 	 */
 	ctx->blks_accessed = queryDesc->totaltime->bufusage.shared_blks_hit +
 						 queryDesc->totaltime->bufusage.shared_blks_read +
-						 queryDesc->totaltime->bufusage.temp_blks_read +
-						 queryDesc->totaltime->bufusage.temp_blks_written;
+						 queryDesc->totaltime->bufusage.local_blks_hit +
+						 queryDesc->totaltime->bufusage.local_blks_read +
+						 queryDesc->totaltime->bufusage.temp_blks_read;
 
 	/*
-	 * Collect local blocks statistics separately to help identify work_mem issues.
-	 * Local blocks indicate temporary tables/sorts spilling to disk, suggesting
-	 * insufficient work_mem rather than optimization/statistics errors.
+	 * Collect temp blocks written separately to help identify work_mem
+	 * issues. Temp blocks written indicate sorts/hash joins spilling to disk,
+	 * suggesting insufficient work_mem rather than optimization errors.
 	 */
-	ctx->local_blks = queryDesc->totaltime->bufusage.local_blks_read +
-					  queryDesc->totaltime->bufusage.local_blks_written +
-					  queryDesc->totaltime->bufusage.local_blks_dirtied;
+	ctx->temp_blks = queryDesc->totaltime->bufusage.temp_blks_written;
 
 	/* Initialize JOIN filtering statistics */
 	ctx->f_join_filter = 0.;

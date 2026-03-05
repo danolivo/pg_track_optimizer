@@ -2,15 +2,15 @@
 	"name": "pg_track_optimizer",
 	"abstract": "Track planning decisions in comparison with execution reality",
 	"description": "A lightweight PostgreSQL extension for detecting suboptimal query plans by analysing the gap between planner estimates and actual execution statistics.",
-	"version": "0.9.1",
+	"version": "0.9.2",
 	"maintainer": "Andrei Lepikhov <lepihov@gmail.com>",
 	"license": "mit",
 	"provides": {
 		"pg_track_optimizer": {
 			"abstract": "Track planning decisions in comparison with execution reality",
-			"file": "pg_track_optimizer--0.9.1.sql",
+			"file": "pg_track_optimizer--0.9.2.sql",
 			"docfile": "README.md",
-			"version": "0.9.1"
+			"version": "0.9.2"
 		}
 	},
 	"prereqs": {

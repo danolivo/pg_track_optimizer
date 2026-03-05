@@ -217,7 +217,7 @@ CREATE FUNCTION pg_track_optimizer(
 	OUT twa_error		rstats,
 	OUT wca_error		rstats,
 	OUT blks_accessed   rstats,
-	OUT local_blks      rstats,
+	OUT temp_blks       rstats,
 	OUT exec_time       rstats,
 	OUT f_join_filter   rstats,
 	OUT f_scan_filter   rstats,
@@ -263,10 +263,10 @@ CREATE VIEW pg_track_optimizer AS SELECT
   t.blks_accessed -> 'count' AS blks_cnt,
   t.blks_accessed -> 'mean' AS blks_avg, t.blks_accessed -> 'stddev' AS blks_dev,
 
-  /* Local blocks statistics (work_mem indicator) */
-  t.local_blks -> 'min' AS local_min, t.local_blks -> 'max' AS local_max,
-  t.local_blks -> 'count' AS local_cnt,
-  t.local_blks -> 'mean' AS local_avg, t.local_blks -> 'stddev' AS local_dev,
+  /* Temp blocks statistics (work_mem indicator) */
+  t.temp_blks -> 'min' AS temp_min, t.temp_blks -> 'max' AS temp_max,
+  t.temp_blks -> 'count' AS temp_cnt,
+  t.temp_blks -> 'mean' AS temp_avg, t.temp_blks -> 'stddev' AS temp_dev,
 
   /* Execution time statistics (milliseconds) */
   t.exec_time -> 'min' AS time_min, t.exec_time -> 'max' AS time_max,
