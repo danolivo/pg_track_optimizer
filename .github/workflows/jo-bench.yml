@@ -290,7 +290,7 @@ jobs:
             ROUND(AVG(twa_avg)::numeric, 2) as twa_error_mean,
             ROUND(AVG(wca_avg)::numeric, 2) as wca_error_mean,
             SUM(blks_avg) as total_blks_avg,
-            SUM(local_avg) as total_local_avg,
+            SUM(temp_avg) as total_temp_avg,
             SUM(nexecs) as total_executions,
             ROUND(SUM(time_avg * nexecs)::numeric, 2) as total_exec_time_ms
           FROM pg_track_optimizer;
@@ -308,7 +308,7 @@ jobs:
             twa_avg,twa_min,twa_max,twa_cnt,twa_dev,
             wca_avg,wca_min,wca_max,wca_cnt,wca_dev,
             blks_avg,blks_min,blks_max,blks_cnt,blks_dev,
-            local_avg,local_min,local_max,local_cnt,local_dev,
+            temp_avg,temp_min,temp_max,temp_cnt,temp_dev,
             time_avg,time_min,time_max,time_cnt,time_dev,
             evaluated_nodes, plan_nodes,
             nexecs
