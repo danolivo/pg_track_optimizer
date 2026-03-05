@@ -7,7 +7,7 @@ OBJS = \
 PGFILEDESC = "pg_track_optimizer - track planning decisions"
 
 EXTENSION = pg_track_optimizer
-EXTVERSION = 0.9.1
+EXTVERSION = 0.9.2
 
 DATA = pg_track_optimizer--$(EXTVERSION).sql
 

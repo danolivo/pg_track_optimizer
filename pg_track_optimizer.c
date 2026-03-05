@@ -45,7 +45,7 @@ PG_MODULE_MAGIC;
 #else
 PG_MODULE_MAGIC_EXT(
 					.name = "pg_track_optimizer",
-					.version = "0.9.1"
+					.version = "0.9.2"
 );
 #endif
 
@@ -107,7 +107,7 @@ typedef struct DSMOptimizerTrackerEntry
 	RStats					twa_error;			/* Time-weighted average error - running stats */
 	RStats					wca_error;			/* Weighted Cost Average error - running stats */
 	RStats					blks_accessed;		/* Block I/O (hits + reads + writes) - running stats */
-	RStats					local_blks;			/* Local blocks (read + written + dirtied) - work_mem indicator */
+	RStats					temp_blks;			/* Temp blocks (read + written) - work_mem indicator */
 	RStats					exec_time;			/* Execution time per query - running stats (milliseconds) */
 	RStats					f_join_filter;	/* Maximum filtered rows (nfiltered1+nfiltered2) across JOIN nodes */
 	RStats					f_scan_filter;	/* Maximum nfiltered1 for leaf nodes in the query plan */
@@ -420,7 +420,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		rstats_set_empty(&entry->twa_error);
 		rstats_set_empty(&entry->wca_error);
 		rstats_set_empty(&entry->blks_accessed);
-		rstats_set_empty(&entry->local_blks);
+		rstats_set_empty(&entry->temp_blks);
 		rstats_set_empty(&entry->exec_time);
 		rstats_set_empty(&entry->f_join_filter);
 		rstats_set_empty(&entry->f_scan_filter);
@@ -440,7 +440,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	 * accumulated when non-negative. Negative values can occur legitimately when
 	 * calculations produce undefined results (e.g., division by zero cost in wca_error).
 	 *
-	 * blks_accessed & local_blks: Always accumulated. Block access counts are
+	 * blks_accessed & temp_blks: Always accumulated. Block access counts are
 	 * always >= 0 and represent valid physical I/O measurements for every
 	 * execution.
 	 */
@@ -454,8 +454,8 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		rstats_add_value(&entry->wca_error, ctx->wca_error);
 	Assert(ctx->blks_accessed >= 0);
 	rstats_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
-	Assert(ctx->local_blks >= 0);
-	rstats_add_value(&entry->local_blks, (double) ctx->local_blks);
+	Assert(ctx->temp_blks >= 0);
+	rstats_add_value(&entry->temp_blks, (double) ctx->temp_blks);
 	Assert(ctx->f_join_filter >= 0.);
 	rstats_add_value(&entry->f_join_filter, ctx->f_join_filter);
 	Assert(ctx->f_scan_filter >= 0.);
@@ -724,7 +724,7 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 		values[i++] = RStatsPGetDatum(&entry->twa_error);
 		values[i++] = RStatsPGetDatum(&entry->wca_error);
 		values[i++] = RStatsPGetDatum(&entry->blks_accessed);
-		values[i++] = RStatsPGetDatum(&entry->local_blks);
+		values[i++] = RStatsPGetDatum(&entry->temp_blks);
 		values[i++] = RStatsPGetDatum(&entry->exec_time);
 		values[i++] = RStatsPGetDatum(&entry->f_join_filter);
 		values[i++] = RStatsPGetDatum(&entry->f_scan_filter);
@@ -1219,7 +1219,7 @@ _load_hash_table(TODSMRegistry *state)
 		memcpy(&entry->twa_error, &disk_entry.twa_error, sizeof(RStats));
 		memcpy(&entry->wca_error, &disk_entry.wca_error, sizeof(RStats));
 		memcpy(&entry->blks_accessed, &disk_entry.blks_accessed, sizeof(RStats));
-		memcpy(&entry->local_blks, &disk_entry.local_blks, sizeof(RStats));
+		memcpy(&entry->temp_blks, &disk_entry.temp_blks, sizeof(RStats));
 		memcpy(&entry->exec_time, &disk_entry.exec_time, sizeof(RStats));
 		memcpy(&entry->f_join_filter, &disk_entry.f_join_filter, sizeof(RStats));
 		memcpy(&entry->f_scan_filter, &disk_entry.f_scan_filter, sizeof(RStats));

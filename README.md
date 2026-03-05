@@ -134,7 +134,7 @@ SELECT
     twa_avg, twa_min, twa_max,  -- twa_error expanded fields
     wca_avg, wca_min, wca_max,  -- wca_error expanded fields
     blks_avg, blks_min, blks_max,  -- blks_accessed expanded fields
-    local_avg, local_min, local_max,  -- local_blks expanded fields
+    temp_avg, temp_min, temp_max,  -- temp_blks expanded fields
     time_avg, time_min, time_max,  -- exec_time expanded fields
     evaluated_nodes,
     plan_nodes,
@@ -163,7 +163,7 @@ LIMIT 10;
 | `twa_error` | rstats | Time-Weighted Average (TWA) error per execution. Tracks running statistics of TWA error values across query executions. |
 | `wca_error` | rstats | Cost-Weighted Average (WCA) error per execution. Tracks running statistics of WCA error values across query executions. |
 | `blks_accessed` | rstats | Running statistics of blocks accessed per execution. |
-| `local_blks` | rstats | Running statistics of local blocks (read + written + dirtied) per execution. Local blocks indicate temporary tables or sorts spilling to disk, signaling insufficient work_mem. |
+| `temp_blks` | rstats | Running statistics of temp blocks (read + written) per execution. Temp blocks indicate sorts or hash joins spilling to disk, signaling insufficient work_mem. |
 | `exec_time` | rstats | Execution time per query in milliseconds. Tracks running statistics of execution times across query executions. |
 | `f_join_filter` | rstats | JOIN filtering factor - dimensionless time-weighted filtering overhead for JOIN nodes per execution. Calculated as (filtered_rows / produced_rows) × relative_time. Tracks running statistics across executions. Higher values indicate JOINs where excessive filtering significantly impacts query performance, suggesting potential for better join strategies, indexes, or query rewrites. |
 | `f_scan_filter` | rstats | Leaf node filtering factor - dimensionless time-weighted filtering overhead for scan nodes per execution. Calculated as (filtered_rows / produced_rows) × relative_time. Tracks running statistics across executions. Higher values indicate scans where many rows were fetched but filtered out, consuming significant query time - prime candidates for better indexes or predicate pushdown. |
@@ -173,11 +173,11 @@ LIMIT 10;
 | `plan_nodes` | integer | Total plan nodes (some may be skipped, e.g., never-executed branches) |
 | `nexecs` | bigint | Number of times the query was executed |
 
-> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `blks_accessed`, and `local_blks` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
+> **Note**: The columns `evaluated_nodes`, `plan_nodes`, `exec_time`, `nexecs`, `blks_accessed`, and `temp_blks` provide query execution metrics similar to those found in `pg_stat_statements`. These are included directly in `pg_track_optimizer` for user convenience, providing additional criteria for query filtering and analysis without requiring installation of `pg_stat_statements` or other extensions that may introduce additional overhead.
 
 ### The RStats Type
 
-The `RStats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `avg_error`, `rms_error`, `twa_error`, `wca_error`, `blks_accessed`, `local_blks`, and `exec_time` columns to provide detailed statistics about all error metrics, block access patterns, local block usage (work_mem indicator), and execution times across multiple query executions.
+The `RStats` type is a custom PostgreSQL type for tracking running statistics using Welford's algorithm for numerical stability (thanks [pg_running_stats](https://github.com/chanukyasds/pg_running_stats) for the idea and coding template). It's used for the `avg_error`, `rms_error`, `twa_error`, `wca_error`, `blks_accessed`, `temp_blks`, and `exec_time` columns to provide detailed statistics about all error metrics, block access patterns, temp block usage (work_mem indicator), and execution times across multiple query executions.
 
 **Fields accessible via the `->` operator:**
 - `count`: Number of observations
@@ -268,8 +268,8 @@ Normalises estimation error over execution time. Allows comparing queries with v
 ### High `wca_avg` (cost-weighted average error)
 Normalises estimation error over cost. It should help compare the estimation errors of queries with very different structures.
 
-### High `local_avg` (local blocks)
-Indicates queries using local blocks, which signal work_mem issues rather than optimisation problems:
+### High `temp_avg` (temp blocks)
+Indicates queries using temp blocks, which signal work_mem issues rather than optimisation problems:
 - **Insufficient work_mem**: Sorts, hash joins, or aggregates spilling to disk
 - **Memory-intensive operations**: Queries with high memory requirements exceeding work_mem
 - **Quick fix**: Unlike optimisation errors, this can often be resolved by simply increasing work_mem

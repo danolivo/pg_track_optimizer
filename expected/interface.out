@@ -43,11 +43,11 @@ FROM pg_track_optimizer_status;
  blks_cnt        | double precision |           |          | 
  blks_avg        | double precision |           |          | 
  blks_dev        | double precision |           |          | 
- local_min       | double precision |           |          | 
- local_max       | double precision |           |          | 
- local_cnt       | double precision |           |          | 
- local_avg       | double precision |           |          | 
- local_dev       | double precision |           |          | 
+ temp_min        | double precision |           |          | 
+ temp_max        | double precision |           |          | 
+ temp_cnt        | double precision |           |          | 
+ temp_avg        | double precision |           |          | 
+ temp_dev        | double precision |           |          | 
  time_min        | double precision |           |          | 
  time_max        | double precision |           |          | 
  time_cnt        | double precision |           |          | 
