@@ -36,6 +36,7 @@
 #include "storage/lwlock.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/wait_event.h"
 
 #include "plan_error.h"
 #include "rstats.h"
