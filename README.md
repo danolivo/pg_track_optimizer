@@ -331,6 +331,35 @@ The extension is designed for production use with minimal overhead:
 
 In `normal` mode with a reasonable threshold (e.g., 2.0), only a small fraction of queries are tracked, making the overhead virtually undetectable.
 
+## PGXN Distribution
+
+To prepare and publish a release to [PGXN](https://pgxn.org/):
+
+1. **Update the version** consistently in three files:
+   - `Makefile` (`EXTVERSION`)
+   - `META.json` (`version` and `provides` → `version`, `file`)
+   - `pg_track_optimizer.control` (`default_version`)
+
+2. **Commit and tag** the release:
+   ```bash
+   git commit -am "Release X.Y.Z"
+   git tag vX.Y.Z
+   ```
+
+3. **Build the distribution zip**:
+   ```bash
+   make dist
+   ```
+   This runs `git archive` and produces `pg_track_optimizer-X.Y.Z.zip`.
+
+4. **Upload to PGXN**:
+   ```bash
+   pgxn-utils upload pg_track_optimizer-X.Y.Z.zip
+   ```
+   Or upload manually at https://manager.pgxn.org/upload.
+
+> **Tip**: Install the PGXN client with `pip install pgxn-utils` or `sudo apt install pgxnclient`.
+
 ## Licence
 
 This project is licenced under the MIT Licence. See the LICENCE file for details.
