@@ -1,7 +1,7 @@
 CREATE EXTENSION pg_track_optimizer;
 
--- Cleanup history of previous tests
-SELECT * FROM pg_track_optimizer_reset();
+-- Cleanup history of previous tests; mask the count to avoid version-specific differences
+SELECT pg_track_optimizer_reset() >= 0 AS cleaned;
 
 -- Test flushing zero hash table
 SELECT * FROM pg_track_optimizer_flush();
@@ -16,8 +16,7 @@ SELECT
 FROM pg_track_optimizer()
 ORDER BY query COLLATE "C"; -- Nothing to track for plain explain.
 
-EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF)
-SELECT * FROM pto_test WHERE x < 1;
+SELECT portable_explain_analyze('SELECT * FROM pto_test WHERE x < 1;');
 SELECT
   query, avg_error -> 'mean' >= 0., evaluated_nodes, plan_nodes,
   exec_time -> 'mean' > 0., nexecs
@@ -50,11 +49,10 @@ SET pg_track_optimizer.mode = 'forced';
 
 -- Error must be zero in this case.
 -- XXX: Is there a case when number of parallel workers will be less than 4?
-EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)
-SELECT * FROM t1;
+SELECT portable_explain_analyze('SELECT * FROM t1;');
 
 SELECT query,avg_error,rms_error,evaluated_nodes,plan_nodes,nexecs,blks_accessed
-FROM pg_track_optimizer() WHERE query LIKE '%FROM t1%';
+FROM pg_track_optimizer() WHERE query LIKE '%FROM t1%' AND query LIKE 'EXPLAIN%';
 
 /*
  * IndexOnlyScan may fetch dead tuples and recheck their state in the heap.
