@@ -11,7 +11,7 @@ EXTVERSION = 0.9.2
 
 DATA = pg_track_optimizer--$(EXTVERSION).sql
 
-REGRESS = pg_track_optimizer interface join_filtering rstats subplan
+REGRESS = interface join_filtering pg_track_optimizer rstats subplan
 
 TAP_TESTS = 1
 

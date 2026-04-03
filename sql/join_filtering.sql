@@ -10,6 +10,7 @@ begin
   loop
     out_line := regexp_replace(line, '\d+kB', 'NNkB', 'g');
     out_line := regexp_replace(out_line, 'rows=(\d+)\.00', 'rows=\1', 'g');
+    out_line := regexp_replace(out_line, '(Heap Fetches:) \d+', '\1 N', 'g');
     return next;
   end loop;
 end;
@@ -145,7 +146,6 @@ RESET enable_hashjoin;
 RESET enable_mergejoin;
 RESET enable_material;
 
-DROP FUNCTION portable_explain_analyze;
 DROP TABLE join_inner,join_outer;
 SELECT * FROM pg_track_optimizer_reset();
 DROP EXTENSION pg_track_optimizer;

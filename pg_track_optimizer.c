@@ -36,6 +36,7 @@
 #include "storage/lwlock.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/tuplestore.h"
 #include "utils/wait_event.h"
 
 #include "plan_error.h"
@@ -350,7 +351,7 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 }
 
 static uint32
-hashtable_elements_max()
+hashtable_elements_max(void)
 {
 	return (uint32) (hash_mem * (Size) 1024 / sizeof(DSMOptimizerTrackerEntry));
 }
@@ -749,7 +750,7 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
  * allocated resources and reset static and global state variables.
  */
 static uint32
-reset_htab()
+reset_htab(void)
 {
 	dshash_seq_status			stat;
 	DSMOptimizerTrackerEntry   *entry;
