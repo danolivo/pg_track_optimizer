@@ -11,6 +11,10 @@ begin
     out_line := regexp_replace(line, '\d+kB', 'NNkB', 'g');
     out_line := regexp_replace(out_line, 'rows=(\d+)\.00', 'rows=\1', 'g');
     out_line := regexp_replace(out_line, '(Heap Fetches:) \d+', '\1 N', 'g');
+    -- Skip Index Searches line: added in PG 18, not present in PG 17
+    if out_line ~ '^\s*Index Searches:' then
+      continue;
+    end if;
     return next;
   end loop;
 end;
