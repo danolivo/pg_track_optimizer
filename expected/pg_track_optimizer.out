@@ -146,8 +146,7 @@ SELECT portable_explain_analyze('SELECT val FROM verify_test;');
    Workers Launched: 4
    ->  Parallel Index Only Scan using idx_verify on verify_test (actual rows=20000 loops=5)
          Heap Fetches: N
-         Index Searches: 1
-(6 rows)
+(5 rows)
 
 -- XXX: if we ever implement per-node error printing it would allow to
 -- demonstrate how the error grows and show reasoning for the final value in

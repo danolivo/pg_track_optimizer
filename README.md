@@ -313,6 +313,22 @@ SELECT pg_track_optimizer_reset();
 -- Re-check error metrics
 ```
 
+## Regression Test Expected Output Files
+
+PostgreSQL's `pg_regress` supports multiple alternative expected output files
+(`test.out`, `test_1.out`, `test_2.out`, …).  It tries each in order and
+passes if any matches.  This extension uses that mechanism to handle
+differences in plan output across PostgreSQL versions.
+
+| File | PostgreSQL version | Key differences |
+|------|--------------------|-----------------|
+| `expected/pg_track_optimizer.out` | PG 18+ | `actual rows=N.00` notation; `Heap Fetches` normalised via `portable_explain_analyze`; `Index Searches` filtered out |
+| `expected/pg_track_optimizer_1.out` | PG 17 | `actual rows=N` (no decimals); `Heap Fetches` normalised; `Index Searches` filtered out |
+| `expected/join_filtering.out` | all versions | `Index Searches` and `rows=N.00` normalised by `portable_explain_analyze` |
+| `expected/subplan.out` | PG 19+ | `SubPlan expr_1` naming (new in PG 19); output via `portable_explain_analyze` |
+| `expected/subplan_1.out` | PG 17–18 | `SubPlan 1` naming; output via `portable_explain_analyze` |
+| `expected/interface.out` | all versions | No version-specific differences |
+
 ## Implementation Notes
 
 - **Filtering metrics**: The extension tracks filtering overhead separately from error calculations via `f_scan_filter` and `f_join_filter` metrics. For leaf nodes (scans), `f_scan_filter` captures `nfiltered1` weighted by relative time and output rows. For JOIN nodes, `f_join_filter` captures `nfiltered1 + nfiltered2` similarly weighted. These metrics help identify inefficient scans or joins where many rows are fetched but filtered out. Filtered tuples are **not** included in error calculations (`avg_error`, `rms_error`, etc.) to keep error metrics focused on cardinality estimation accuracy rather than filtering efficiency.

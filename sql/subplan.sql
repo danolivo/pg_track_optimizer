@@ -59,7 +59,7 @@ SET enable_material = 'off';
  * 3. SubPlan evaluates multiple times for each outer row that passes first
  * condition
  */
-EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF)
+SELECT portable_explain_analyze('
 SELECT o.id, o.category, o.val, i.val as inner_val
 FROM outer_table o
 JOIN inner_table i ON
@@ -68,7 +68,7 @@ JOIN inner_table i ON
     SELECT threshold
     FROM reference_table r
     WHERE r.category = o.category
-  );
+  );');
 
 -- Verify the SubPlan executed multiple times
 -- The plan should show "SubPlan" with loops > 10
@@ -81,7 +81,7 @@ SELECT
   plan_nodes,
   nexecs
 FROM pg_track_optimizer()
-WHERE query LIKE '%FROM outer_table%';
+WHERE query LIKE '%FROM outer_table%' AND query LIKE 'EXPLAIN%';
 
 /*
  * Don't care for now about parallel query plan for now - upstream doesn't
@@ -101,7 +101,7 @@ SET parallel_tuple_cost = 0.0000001;
 SET min_parallel_table_scan_size = 0;
 SET min_parallel_index_scan_size = 0;
 
-EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF)
+SELECT portable_explain_analyze('
 SELECT o.id, o.category, o.val, i.val as inner_val
 FROM outer_table o
 JOIN inner_table i ON
@@ -110,7 +110,7 @@ JOIN inner_table i ON
     SELECT threshold
     FROM reference_table r
     WHERE r.category = o.category
-  );
+  );');
 
 RESET max_parallel_workers_per_gather;
 RESET parallel_setup_cost;
