@@ -1,7 +1,7 @@
 CREATE EXTENSION pg_track_optimizer;
 -- Cleanup history
 SELECT * FROM pg_track_optimizer_reset();
- pg_track_optimizer_reset
+ pg_track_optimizer_reset 
 --------------------------
                         1
 (1 row)
@@ -61,7 +61,7 @@ JOIN inner_table i ON
     FROM reference_table r
     WHERE r.category = o.category
   );');
-                    portable_explain_analyze
+                    portable_explain_analyze                     
 -----------------------------------------------------------------
  Nested Loop (actual rows=134 loops=1)
    Join Filter: ((o.id = i.id) OR (o.val > (SubPlan 1)))
@@ -86,7 +86,7 @@ SELECT
   nexecs
 FROM pg_track_optimizer()
 WHERE query LIKE '%FROM outer_table%' AND query LIKE 'EXPLAIN%';
- err_non_zero | jf_non_zero | sf_non_zero | spf_non_zero | evaluated_nodes | plan_nodes | nexecs
+ err_non_zero | jf_non_zero | sf_non_zero | spf_non_zero | evaluated_nodes | plan_nodes | nexecs 
 --------------+-------------+-------------+--------------+-----------------+------------+--------
  t            | t           | t           | t            |               4 |          4 |      1
 (1 row)
@@ -116,7 +116,7 @@ JOIN inner_table i ON
     FROM reference_table r
     WHERE r.category = o.category
   );');
-                         portable_explain_analyze
+                         portable_explain_analyze                         
 --------------------------------------------------------------------------
  Nested Loop (actual rows=134 loops=1)
    Join Filter: ((o.id = i.id) OR (o.val > (SubPlan 1)))
