@@ -15,6 +15,7 @@
 
 #include <math.h>
 
+#include "executor/instrument.h"
 #include "nodes/execnodes.h"
 #include "optimizer/optimizer.h"
 

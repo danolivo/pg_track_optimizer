@@ -78,8 +78,7 @@ SET min_parallel_index_scan_size = 0;
 SET enable_seqscan = off;
 
 -- Check if we get parallel index-only scan WITH heap fetches
-EXPLAIN (COSTS OFF, ANALYZE, BUFFERS OFF, TIMING OFF, SUMMARY OFF)
-SELECT val FROM verify_test;
+SELECT portable_explain_analyze('SELECT val FROM verify_test;');
 
 -- XXX: if we ever implement per-node error printing it would allow to
 -- demonstrate how the error grows and show reasoning for the final value in

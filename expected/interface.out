@@ -2,7 +2,7 @@ CREATE EXTENSION pg_track_optimizer;
 SELECT * FROM pg_track_optimizer_reset();
  pg_track_optimizer_reset 
 --------------------------
-                        1
+                        0
 (1 row)
 
 SELECT mode,entries_left,is_synced
