@@ -1,25 +1,3 @@
-create or replace function portable_explain_analyze(query text)
-returns table (out_line text) language plpgsql
-as
-$$
-declare
-  line text;
-begin
-  for line in
-    execute 'EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF)' || query
-  loop
-    out_line := regexp_replace(line, '\d+kB', 'NNkB', 'g');
-    out_line := regexp_replace(out_line, 'rows=(\d+)\.00', 'rows=\1', 'g');
-    out_line := regexp_replace(out_line, '(Heap Fetches:) \d+', '\1 N', 'g');
-    -- Skip Index Searches line: added in PG 18, not present in PG 17
-    if out_line ~ '^\s*Index Searches:' then
-      continue;
-    end if;
-    return next;
-  end loop;
-end;
-$$;
-
 CREATE EXTENSION pg_track_optimizer;
 
 -- Cleanup history
@@ -61,7 +39,7 @@ SET enable_material = off;
 -- This query will produce a NestLoop with join filtering
 -- The join condition includes both id match and val match,
 -- where val match acts as a filter
-SELECT portable_explain_analyze('
+SELECT pretty_explain_analyze('
 SELECT * FROM join_outer
 JOIN join_inner ON join_outer.id = join_inner.id
 WHERE join_outer.val + join_inner.val > 5;
@@ -77,7 +55,7 @@ SELECT
   nexecs
 FROM pg_track_optimizer()
 WHERE query LIKE '%FROM join_outer%' AND
-  query NOT LIKE '%portable_explain_analyze%' AND
+  query NOT LIKE '%pretty_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%';
 
 -- Cleanup
@@ -92,7 +70,7 @@ RESET enable_material;
  */
 
 -- First pass: no signs of filtered tuples or estimation errors
-SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+SELECT pretty_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
 
 SELECT
   ROUND((avg_avg::numeric), 2) AS err,
@@ -100,11 +78,11 @@ SELECT
   evaluated_nodes en, plan_nodes pn, nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
-  query NOT LIKE '%portable_explain_analyze%' AND
+  query NOT LIKE '%pretty_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%'
 ORDER BY err,en,pn;
 
-SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id) LIMIT 1;');
+SELECT pretty_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id) LIMIT 1;');
 
 SELECT
   ROUND((avg_avg::numeric), 2) AS err,
@@ -112,13 +90,13 @@ SELECT
   evaluated_nodes en, plan_nodes pn, nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
-  query NOT LIKE '%portable_explain_analyze%' AND
+  query NOT LIKE '%pretty_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%'
 ORDER BY err,en,pn;
 
 CREATE INDEX join_outer_id_idx ON join_outer (id);
 -- Second pass: only MergeJoin runtime optimisation detects an estimation error
-SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+SELECT pretty_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
 
 SELECT
   ROUND((avg_avg::numeric), 2) AS err,
@@ -128,7 +106,7 @@ SELECT
   nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
-  query NOT LIKE '%portable_explain_analyze%' AND
+  query NOT LIKE '%pretty_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%'
 ORDER BY err,en,pn;
 
@@ -140,11 +118,11 @@ VACUUM ANALYZE join_inner;
 SET enable_mergejoin = off;
 SET enable_material = off;
 
-SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+SELECT pretty_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
 
 SET enable_hashjoin = off;
 
-SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+SELECT pretty_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
 
 RESET enable_hashjoin;
 RESET enable_mergejoin;

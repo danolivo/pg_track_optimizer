@@ -59,7 +59,7 @@ SET enable_material = 'off';
  * 3. SubPlan evaluates multiple times for each outer row that passes first
  * condition
  */
-SELECT portable_explain_analyze('
+SELECT pretty_explain_analyze('
 SELECT o.id, o.category, o.val, i.val as inner_val
 FROM outer_table o
 JOIN inner_table i ON
@@ -101,7 +101,7 @@ SET parallel_tuple_cost = 0.0000001;
 SET min_parallel_table_scan_size = 0;
 SET min_parallel_index_scan_size = 0;
 
-SELECT portable_explain_analyze('
+SELECT pretty_explain_analyze('
 SELECT o.id, o.category, o.val, i.val as inner_val
 FROM outer_table o
 JOIN inner_table i ON

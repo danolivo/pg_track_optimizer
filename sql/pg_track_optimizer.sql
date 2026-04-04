@@ -16,7 +16,7 @@ SELECT
 FROM pg_track_optimizer()
 ORDER BY query COLLATE "C"; -- Nothing to track for plain explain.
 
-SELECT portable_explain_analyze('SELECT * FROM pto_test WHERE x < 1;');
+SELECT pretty_explain_analyze('SELECT * FROM pto_test WHERE x < 1;');
 SELECT
   query, avg_error -> 'mean' >= 0., evaluated_nodes, plan_nodes,
   exec_time -> 'mean' > 0., nexecs
@@ -49,7 +49,7 @@ SET pg_track_optimizer.mode = 'forced';
 
 -- Error must be zero in this case.
 -- XXX: Is there a case when number of parallel workers will be less than 4?
-SELECT portable_explain_analyze('SELECT * FROM t1;');
+SELECT pretty_explain_analyze('SELECT * FROM t1;');
 
 SELECT query,avg_error,rms_error,evaluated_nodes,plan_nodes,nexecs,blks_accessed
 FROM pg_track_optimizer() WHERE query LIKE '%FROM t1%' AND query LIKE 'EXPLAIN%';
@@ -76,7 +76,7 @@ SET min_parallel_index_scan_size = 0;
 SET enable_seqscan = off;
 
 -- Check if we get parallel index-only scan WITH heap fetches
-SELECT portable_explain_analyze('SELECT val FROM verify_test;');
+SELECT pretty_explain_analyze('SELECT val FROM verify_test;');
 
 -- XXX: if we ever implement per-node error printing it would allow to
 -- demonstrate how the error grows and show reasoning for the final value in

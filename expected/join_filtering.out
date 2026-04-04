@@ -1,24 +1,3 @@
-create or replace function portable_explain_analyze(query text)
-returns table (out_line text) language plpgsql
-as
-$$
-declare
-  line text;
-begin
-  for line in
-    execute 'EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF, SUMMARY OFF, BUFFERS OFF)' || query
-  loop
-    out_line := regexp_replace(line, '\d+kB', 'NNkB', 'g');
-    out_line := regexp_replace(out_line, 'rows=(\d+)\.00', 'rows=\1', 'g');
-    out_line := regexp_replace(out_line, '(Heap Fetches:) \d+', '\1 N', 'g');
-    -- Skip Index Searches line: added in PG 18, not present in PG 17
-    if out_line ~ '^\s*Index Searches:' then
-      continue;
-    end if;
-    return next;
-  end loop;
-end;
-$$;
 CREATE EXTENSION pg_track_optimizer;
 -- Cleanup history
 SELECT * FROM pg_track_optimizer_reset();
@@ -56,12 +35,12 @@ SET enable_material = off;
 -- This query will produce a NestLoop with join filtering
 -- The join condition includes both id match and val match,
 -- where val match acts as a filter
-SELECT portable_explain_analyze('
+SELECT pretty_explain_analyze('
 SELECT * FROM join_outer
 JOIN join_inner ON join_outer.id = join_inner.id
 WHERE join_outer.val + join_inner.val > 5;
 ');
-                                   portable_explain_analyze                                   
+                                    pretty_explain_analyze                                    
 ----------------------------------------------------------------------------------------------
  Nested Loop (actual rows=70 loops=1)
    Join Filter: ((join_outer.id = join_inner.id) AND ((join_outer.val + join_inner.val) > 5))
@@ -80,7 +59,7 @@ SELECT
   nexecs
 FROM pg_track_optimizer()
 WHERE query LIKE '%FROM join_outer%' AND
-  query NOT LIKE '%portable_explain_analyze%' AND
+  query NOT LIKE '%pretty_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%';
                                query                                | error | evaluated_nodes | plan_nodes | nexecs 
 --------------------------------------------------------------------+-------+-----------------+------------+--------
@@ -101,8 +80,8 @@ RESET enable_material;
  * minor part of it - no filters, just earlier stop or low usage of a hash table
  */
 -- First pass: no signs of filtered tuples or estimation errors
-SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
-                   portable_explain_analyze                   
+SELECT pretty_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+                    pretty_explain_analyze                    
 --------------------------------------------------------------
  Hash Join (actual rows=100 loops=1)
    Hash Cond: (join_outer.id = join_inner.id)
@@ -118,7 +97,7 @@ SELECT
   evaluated_nodes en, plan_nodes pn, nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
-  query NOT LIKE '%portable_explain_analyze%' AND
+  query NOT LIKE '%pretty_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%'
 ORDER BY err,en,pn;
  err  | jf_max | lf_max | en | pn | nex 
@@ -126,8 +105,8 @@ ORDER BY err,en,pn;
  0.00 |      0 |      0 |  4 |  4 |   1
 (1 row)
 
-SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id) LIMIT 1;');
-                      portable_explain_analyze                      
+SELECT pretty_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id) LIMIT 1;');
+                       pretty_explain_analyze                       
 --------------------------------------------------------------------
  Limit (actual rows=1 loops=1)
    ->  Hash Join (actual rows=1 loops=1)
@@ -144,7 +123,7 @@ SELECT
   evaluated_nodes en, plan_nodes pn, nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
-  query NOT LIKE '%portable_explain_analyze%' AND
+  query NOT LIKE '%pretty_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%'
 ORDER BY err,en,pn;
  err  | jf_max | lf_max | en | pn | nex 
@@ -155,8 +134,8 @@ ORDER BY err,en,pn;
 
 CREATE INDEX join_outer_id_idx ON join_outer (id);
 -- Second pass: only MergeJoin runtime optimisation detects an estimation error
-SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
-                             portable_explain_analyze                             
+SELECT pretty_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+                              pretty_explain_analyze                              
 ----------------------------------------------------------------------------------
  Merge Join (actual rows=100 loops=1)
    Merge Cond: (join_outer.id = join_inner.id)
@@ -175,7 +154,7 @@ SELECT
   nexecs nex
 FROM pg_track_optimizer
 WHERE query LIKE '%join_inner JOIN join_outer USING (id)%' AND
-  query NOT LIKE '%portable_explain_analyze%' AND
+  query NOT LIKE '%pretty_explain_analyze%' AND
   query NOT LIKE '%pg_track_optimizer%'
 ORDER BY err,en,pn;
  err  | jf_max | lf_max | en | pn | nex 
@@ -190,8 +169,8 @@ INSERT INTO join_inner SELECT i, i % 10 FROM generate_series(-50, 50) i;
 VACUUM ANALYZE join_inner;
 SET enable_mergejoin = off;
 SET enable_material = off;
-SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
-                   portable_explain_analyze                   
+SELECT pretty_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+                    pretty_explain_analyze                    
 --------------------------------------------------------------
  Hash Join (actual rows=50 loops=1)
    Hash Cond: (join_outer.id = join_inner.id)
@@ -202,8 +181,8 @@ SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING 
 (6 rows)
 
 SET enable_hashjoin = off;
-SELECT portable_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
-                 portable_explain_analyze                  
+SELECT pretty_explain_analyze('SELECT * FROM join_inner JOIN join_outer USING (id);');
+                  pretty_explain_analyze                   
 -----------------------------------------------------------
  Nested Loop (actual rows=50 loops=1)
    Join Filter: (join_inner.id = join_outer.id)

@@ -51,7 +51,7 @@ SET enable_material = 'off';
  * 3. SubPlan evaluates multiple times for each outer row that passes first
  * condition
  */
-SELECT portable_explain_analyze('
+SELECT pretty_explain_analyze('
 SELECT o.id, o.category, o.val, i.val as inner_val
 FROM outer_table o
 JOIN inner_table i ON
@@ -61,7 +61,7 @@ JOIN inner_table i ON
     FROM reference_table r
     WHERE r.category = o.category
   );');
-                    portable_explain_analyze                     
+                     pretty_explain_analyze                      
 -----------------------------------------------------------------
  Nested Loop (actual rows=134 loops=1)
    Join Filter: ((o.id = i.id) OR (o.val > (SubPlan expr_1)))
@@ -106,7 +106,7 @@ SET parallel_setup_cost = 0.0001;
 SET parallel_tuple_cost = 0.0000001;
 SET min_parallel_table_scan_size = 0;
 SET min_parallel_index_scan_size = 0;
-SELECT portable_explain_analyze('
+SELECT pretty_explain_analyze('
 SELECT o.id, o.category, o.val, i.val as inner_val
 FROM outer_table o
 JOIN inner_table i ON
@@ -116,7 +116,7 @@ JOIN inner_table i ON
     FROM reference_table r
     WHERE r.category = o.category
   );');
-                         portable_explain_analyze                         
+                          pretty_explain_analyze                          
 --------------------------------------------------------------------------
  Nested Loop (actual rows=134 loops=1)
    Join Filter: ((o.id = i.id) OR (o.val > (SubPlan expr_1)))

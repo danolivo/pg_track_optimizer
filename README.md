@@ -322,10 +322,10 @@ differences in plan output across PostgreSQL versions.
 
 | File | PostgreSQL version | Key differences |
 |------|--------------------|-----------------|
-| `expected/pg_track_optimizer.out` | all versions | all EXPLAIN output routed through `portable_explain_analyze`; `Heap Fetches` and `rows=N.00` normalised; `Index Searches` filtered out |
-| `expected/join_filtering.out` | all versions | `Index Searches` and `rows=N.00` normalised by `portable_explain_analyze` |
-| `expected/subplan.out` | PG 19+ | `SubPlan expr_1` naming (new in PG 19); output via `portable_explain_analyze` |
-| `expected/subplan_1.out` | PG 17–18 | `SubPlan 1` naming; output via `portable_explain_analyze` |
+| `expected/pg_track_optimizer.out` | all versions | all EXPLAIN output routed through `pretty_explain_analyze`; `Heap Fetches` and `rows=N.00` normalised; `Index Searches` filtered out |
+| `expected/join_filtering.out` | all versions | `Index Searches` and `rows=N.00` normalised by `pretty_explain_analyze` |
+| `expected/subplan.out` | PG 19+ | `SubPlan expr_1` naming (new in PG 19); output via `pretty_explain_analyze` |
+| `expected/subplan_1.out` | PG 17–18 | `SubPlan 1` naming; output via `pretty_explain_analyze` |
 | `expected/interface.out` | all versions | No version-specific differences |
 
 ## Implementation Notes
