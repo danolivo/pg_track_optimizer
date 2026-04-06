@@ -55,10 +55,14 @@ prediction_walker(PlanState *pstate, void *context)
 		 */
 		foreach_node(SubPlanState, sps, pstate->subPlan)
 		{
-			Instrumentation	   *instr = sps->planstate->instrument;
-			double				subplan_time;
-			double				loop_factor;
-			double				cost_factor;
+#if PG_VERSION_NUM >= 190000
+			NodeInstrumentation	   *instr = sps->planstate->instrument;
+#else
+			Instrumentation		   *instr = sps->planstate->instrument;
+#endif
+			double					subplan_time;
+			double					loop_factor;
+			double					cost_factor;
 
 			/*
 			 * TODO:
@@ -76,7 +80,7 @@ prediction_walker(PlanState *pstate, void *context)
 
 			nloops = instr->nloops;
 #if PG_VERSION_NUM >= 190000
-			subplan_time = INSTR_TIME_GET_MILLISEC(instr->total);
+			subplan_time = INSTR_TIME_GET_MILLISEC(instr->instr.total);
 #else
 			subplan_time = instr->total * 1000.;
 #endif
@@ -116,8 +120,8 @@ prediction_walker(PlanState *pstate, void *context)
 	InstrEndLoop(pstate->instrument);
 	nloops = pstate->instrument->nloops;
 #if PG_VERSION_NUM >= 190000
-	node_time = INSTR_TIME_IS_ZERO(pstate->instrument->total) ? 0.0 :
-							INSTR_TIME_GET_MILLISEC(pstate->instrument->total);
+	node_time = INSTR_TIME_IS_ZERO(pstate->instrument->instr.total) ? 0.0 :
+					INSTR_TIME_GET_MILLISEC(pstate->instrument->instr.total);
 #else
 	node_time = pstate->instrument->total * 1000.;
 #endif
@@ -178,8 +182,11 @@ prediction_walker(PlanState *pstate, void *context)
 		 */
 		for (i = 0; i < pstate->worker_instrument->num_workers; i++)
 		{
-			Instrumentation *instr = &pstate->worker_instrument->instrument[i];
-
+#if PG_VERSION_NUM >= 190000
+			NodeInstrumentation *instr = &pstate->worker_instrument->instrument[i];
+#else
+			Instrumentation	    *instr = &pstate->worker_instrument->instrument[i];
+#endif
 			if (instr->nloops <= 0.0)
 			{
 				/*
