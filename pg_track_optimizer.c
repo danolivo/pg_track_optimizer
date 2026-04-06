@@ -24,6 +24,7 @@
 #include "commands/explain_state.h"
 #endif
 #include "executor/executor.h"
+#include "executor/instrument.h"
 #include "funcapi.h"
 #include "lib/dshash.h"
 #include "miscadmin.h"
@@ -292,7 +293,11 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 		MemoryContext oldcxt;
 
 		oldcxt = MemoryContextSwitchTo(queryDesc->estate->es_query_cxt);
+#if PG_VERSION_NUM >= 190000
+		queryDesc->totaltime = InstrAlloc(INSTRUMENT_ALL);
+#else
 		queryDesc->totaltime = InstrAlloc(1, INSTRUMENT_ALL, false);
+#endif
 		MemoryContextSwitchTo(oldcxt);
 	}
 }
