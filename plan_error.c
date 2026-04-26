@@ -366,7 +366,7 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	ctx->twa_error = 0.;
 	ctx->wca_error = 0.;
 #if PG_VERSION_NUM >= 190000
-	ctx->totaltime = INSTR_TIME_GET_MILLISEC(queryDesc->totaltime->total);
+	ctx->totaltime = INSTR_TIME_GET_MILLISEC(queryDesc->query_instr->total);
 #else
 	ctx->totaltime = queryDesc->totaltime->total * 1000.;
 #endif
@@ -389,18 +389,30 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	 * For the sake of optimisation preciseness we don't differ blocks found in
 	 * memory and fetched from the disk - the optimiser doesn't predict that.
 	 */
+#if PG_VERSION_NUM >= 190000
+	ctx->blks_accessed = queryDesc->query_instr->bufusage.shared_blks_hit +
+						 queryDesc->query_instr->bufusage.shared_blks_read +
+						 queryDesc->query_instr->bufusage.local_blks_hit +
+						 queryDesc->query_instr->bufusage.local_blks_read +
+						 queryDesc->query_instr->bufusage.temp_blks_read;
+#else
 	ctx->blks_accessed = queryDesc->totaltime->bufusage.shared_blks_hit +
 						 queryDesc->totaltime->bufusage.shared_blks_read +
 						 queryDesc->totaltime->bufusage.local_blks_hit +
 						 queryDesc->totaltime->bufusage.local_blks_read +
 						 queryDesc->totaltime->bufusage.temp_blks_read;
+#endif
 
 	/*
 	 * Collect temp blocks written separately to help identify work_mem
 	 * issues. Temp blocks written indicate sorts/hash joins spilling to disk,
 	 * suggesting insufficient work_mem rather than optimization errors.
 	 */
+#if PG_VERSION_NUM >= 190000
+	ctx->temp_blks = queryDesc->query_instr->bufusage.temp_blks_written;
+#else
 	ctx->temp_blks = queryDesc->totaltime->bufusage.temp_blks_written;
+#endif
 
 	/* Initialize JOIN filtering statistics */
 	ctx->f_join_filter = 0.;
