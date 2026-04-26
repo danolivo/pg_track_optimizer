@@ -273,7 +273,20 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	track_attach_shmem();
 
 	if (track_optimizer_enabled(queryDesc, eflags))
+	{
 		queryDesc->instrument_options |= INSTRUMENT_TIMER | INSTRUMENT_ROWS | INSTRUMENT_BUFFERS;
+#if PG_VERSION_NUM >= 190000
+		/*
+		 * Ask core to set up query-level instrumentation for us.  This MUST
+		 * be done before standard_ExecutorStart: core inspects
+		 * query_instr_options there and allocates query_instr only if it is
+		 * non-zero (see standard_ExecutorStart in execMain.c).  Setting the
+		 * options later has no effect, and plan_error() needs both timing
+		 * and buffer usage from query_instr.
+		 */
+		queryDesc->query_instr_options |= INSTRUMENT_TIMER | INSTRUMENT_BUFFERS;
+#endif
+	}
 
 	if (prev_ExecutorStart)
 		prev_ExecutorStart(queryDesc, eflags);
@@ -283,23 +296,20 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	if (!track_optimizer_enabled(queryDesc, eflags))
 		return;
 
+#if PG_VERSION_NUM < 190000
 	/*
-	 * Set up to track total elapsed time in ExecutorRun.  Make sure the
-	 * space is allocated in the per-query context so it will go away at
-	 * ExecutorEnd.
+	 * Pre-19 PostgreSQL has no query_instr; allocate totaltime ourselves in
+	 * the per-query context so it goes away at ExecutorEnd.
 	 */
 	if (queryDesc->totaltime == NULL)
 	{
 		MemoryContext oldcxt;
 
 		oldcxt = MemoryContextSwitchTo(queryDesc->estate->es_query_cxt);
-#if PG_VERSION_NUM >= 190000
-		queryDesc->totaltime = InstrAlloc(INSTRUMENT_ALL);
-#else
 		queryDesc->totaltime = InstrAlloc(1, INSTRUMENT_ALL, false);
-#endif
 		MemoryContextSwitchTo(oldcxt);
 	}
+#endif
 }
 
 /*
@@ -314,7 +324,7 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 	if (log_min_error < 0. || normalized_error < log_min_error)
 		return;
 #if PG_VERSION_NUM >= 190000
-	msec = INSTR_TIME_GET_MILLISEC(queryDesc->totaltime->total);
+	msec = INSTR_TIME_GET_MILLISEC(queryDesc->query_instr->total);
 #else
 	msec = queryDesc->totaltime->total * 1000.0;
 #endif
@@ -490,8 +500,12 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	PlanEstimatorContext	ctx;
 
 	track_attach_shmem();
-
+#if PG_VERSION_NUM >= 190000
+	if (!queryDesc->query_instr ||
+		!(queryDesc->query_instr_options & INSTRUMENT_TIMER) ||
+#else
 	if (!queryDesc->totaltime ||
+#endif
 		!track_optimizer_enabled(queryDesc, queryDesc->estate->es_top_eflags) ||
 		queryDesc->plannedstmt->queryId == 0)
 		/*
@@ -515,8 +529,16 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	/*
 	 * Make sure stats accumulation is done.  (Note: it's okay if several
 	 * levels of hook all do this.)
+	 *
+	 * On PG >= 19 the query-level Instrumentation is updated directly by
+	 * core's InstrStart/InstrStop pair around ExecutorRun (InstrStop folds
+	 * elapsed time straight into ->total), so there is no end-loop step
+	 * here.  Pre-19 totaltime was a NodeInstrumentation and did need the
+	 * end-loop call.
 	 */
+#if PG_VERSION_NUM < 190000
 	InstrEndLoop(queryDesc->totaltime);
+#endif
 
 	/*
 	 * Check that the plan was actually executed (not just a cursor declared
@@ -527,7 +549,7 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 	if ((queryDesc->planstate->instrument->running ||
 		queryDesc->planstate->instrument->nloops > 0) &&
 #if PG_VERSION_NUM >= 190000
-		!INSTR_TIME_IS_ZERO(queryDesc->totaltime->total)
+		!INSTR_TIME_IS_ZERO(queryDesc->query_instr->total)
 #else
 		queryDesc->totaltime->total > 0.0
 #endif
