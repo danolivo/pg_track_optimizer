@@ -37,6 +37,7 @@
 #include "storage/lwlock.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/memutils.h"
 #include "utils/tuplestore.h"
 #include "utils/wait_event.h"
 
@@ -1076,6 +1077,14 @@ recreate_htab(TODSMRegistry *state)
  * Records are read until an EOF marker entry is encountered (queryId=0 and
  * dbOid=InvalidOid). After the EOF marker, a stored record count is read
  * for verification.
+ *
+ * IMPORTANT: this runs inside the DSM initialization callback, i.e. during
+ * the ExecutorStart hook of whatever user query happens to touch the
+ * extension first after a restart.  The statistics file is an optional
+ * cache: no defect in it - corruption, truncation, version mismatch - may
+ * ever abort that innocent query.  Every failure path below reports the
+ * reason at WARNING, throws away whatever fraction was loaded and continues
+ * with an empty hash table.
  */
 static uint32
 _load_hash_table(TODSMRegistry *state)
@@ -1099,28 +1108,29 @@ _load_hash_table(TODSMRegistry *state)
 		elog(WARNING,
 			 "[%s] unexpected state of shared memory; data not loaded",
 			 EXTENSION_NAME);
-		return false;
+		return -1;
 	}
 
 	/* Must load data into an empty hash table */
 	if (pg_atomic_read_u32(&state->htab_counter) != 0)
 	{
-		/*
-		 * Production behaviour. Don't do anything, just give a clue what
-		 * the calling user may do to safely fix the problem.
-		 */
-		ereport(ERROR,
+		ereport(WARNING,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg("The pg_track_optimizer HTAB is not empty"),
-				 errhint("Reset hash table in advance")));
+				 errmsg("[%s] hash table is unexpectedly not empty; data not loaded",
+						EXTENSION_NAME),
+				 errhint("Reset the statistics to clean up the hash table.")));
+		return -1;
 	}
 
 	file = PathNameOpenFile(filename, O_RDONLY | PG_BINARY);
 	if (file < 0)
 	{
 		if (errno != ENOENT)
-			goto read_error;
-		/* File does not exist */
+			ereport(WARNING,
+					(errcode_for_file_access(),
+					 errmsg("[%s] could not open file \"%s\": %m",
+							EXTENSION_NAME, filename)));
+		/* Nothing to load */
 		return -1;
 	}
 
@@ -1149,6 +1159,14 @@ _load_hash_table(TODSMRegistry *state)
 					  WAIT_EVENT_DATA_FILE_READ);
 	if (nbytes != sizeof(uint32))
 		goto read_error;
+
+	/*
+	 * Length fields come from an unverified file (the CRC is only checked at
+	 * the very end), so bound them before using them for allocations: a
+	 * corrupted length must not drive a multi-gigabyte palloc.
+	 */
+	if (verstr_len == 0 || verstr_len > 1024)
+		goto length_error;
 	COMP_CRC32C(crc, &verstr_len, sizeof(uint32));
 	filepos += nbytes;
 
@@ -1168,6 +1186,7 @@ _load_hash_table(TODSMRegistry *state)
 			 errhint("remove the file manually or reset statistics in advance")));
 
 		/* No entries yet added to HTAB. simple exit path */
+		pfree(ver_str);
 		goto end;
 	}
 	COMP_CRC32C(crc, ver_str, verstr_len);
@@ -1205,12 +1224,13 @@ _load_hash_table(TODSMRegistry *state)
 		/* Check if we're exceeding hash table capacity */
 		if (counter >= (uint32) hashtable_elements_max())
 		{
-			ereport(ERROR,
+			ereport(WARNING,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("[%s] file \"%s\" contains more records than hash table may consume (%d)",
 				 EXTENSION_NAME, filename, hashtable_elements_max()),
 				 errdetail("skip data file load for safety"),
 				 errhint("remove the file manually or reset statistics in advance")));
+			goto soft_failed_end;
 		}
 
 		/* Load query string */
@@ -1218,11 +1238,28 @@ _load_hash_table(TODSMRegistry *state)
 						  WAIT_EVENT_DATA_FILE_READ);
 		if (nbytes != sizeof(uint32))
 			goto read_error;
+		/* Bound the length before allocating: see verstr_len above */
+		if (len >= MaxAllocSize)
+			goto length_error;
 		COMP_CRC32C(crc, &len, sizeof(uint32));
 		filepos += nbytes;
 
-		disk_entry.query_ptr = dsa_allocate0(htab_dsa, len + 1);
-		Assert(DsaPointerIsValid(disk_entry.query_ptr));
+		/*
+		 * No-OOM allocation: an out-of-memory condition while loading an
+		 * optional cache should degrade to an empty table, not abort the
+		 * user query we are riding on.
+		 */
+		disk_entry.query_ptr = dsa_allocate_extended(htab_dsa, len + 1,
+													 DSA_ALLOC_NO_OOM | DSA_ALLOC_ZERO);
+		if (!DsaPointerIsValid(disk_entry.query_ptr))
+		{
+			ereport(WARNING,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("[%s] out of shared memory while loading file \"%s\"",
+				 EXTENSION_NAME, filename),
+				 errdetail("skip data file load for safety")));
+			goto soft_failed_end;
+		}
 		str = (char *) dsa_get_address(htab_dsa, disk_entry.query_ptr);
 		nbytes = FileRead(file, str, len, filepos, WAIT_EVENT_DATA_FILE_READ);
 		if (nbytes != len)
@@ -1232,10 +1269,15 @@ _load_hash_table(TODSMRegistry *state)
 
 		entry = dshash_find_or_insert(htab, &disk_entry.key, &found);
 		if (found)
-			ereport(ERROR,
+		{
+			/* Release the lock before recreate_htab() destroys the table */
+			dshash_release_lock(htab, entry);
+			ereport(WARNING,
 				(errcode(ERRCODE_DATA_CORRUPTED),
 				 errmsg("[%s] file \"%s\" has duplicate record with dbOid %u and queryId "UINT64_FORMAT,
 				 EXTENSION_NAME, filename, disk_entry.key.dbOid, disk_entry.key.queryId)));
+			goto soft_failed_end;
+		}
 
 		/*
 		 * TODO: copy all data in one operation. At least we will not do
@@ -1305,18 +1347,15 @@ _load_hash_table(TODSMRegistry *state)
 		goto soft_failed_end;
 	}
 
-	/*
-	 * Verify we're at EOF - no extra data after the checksum.
-	 * Use assertion to identify the issue during development cycle.
-	 */
+	/* Verify we're at EOF - no extra data after the checksum. */
 	nbytes = FileRead(file, &disk_entry, 1, filepos, WAIT_EVENT_DATA_FILE_READ);
 	if (nbytes == 1)
 	{
-		Assert(0);
 		ereport(WARNING,
 				(errcode(ERRCODE_DATA_CORRUPTED),
 				 errmsg("[%s] file \"%s\" contains more data than expected",
 				 EXTENSION_NAME, filename)));
+		goto soft_failed_end;
 	}
 
 	FileClose(file);
@@ -1325,35 +1364,59 @@ _load_hash_table(TODSMRegistry *state)
 		 EXTENSION_NAME, counter, filename);
 	return counter;
 
-/* Upper TRY/CATCH section must guarantee HTAB cleanup on ERROR */
+/*
+ * Failure exits.  Everything lands at WARNING: an unusable statistics file
+ * must degrade to an empty hash table, never abort the user query whose
+ * ExecutorStart we are running in.  Paths that may have inserted entries
+ * already go through soft_failed_end to rebuild the table from scratch.
+ */
 read_error:
-	ereport(ERROR,
-			(errcode_for_file_access(),
-			 errmsg("[%s] could not read file \"%s\": %m",
-			 EXTENSION_NAME, filename)));
+	ereport(WARNING,
+			(errcode(ERRCODE_DATA_CORRUPTED),
+			 errmsg("[%s] could not read file \"%s\": it is possibly truncated",
+			 EXTENSION_NAME, filename),
+			 errdetail("skip data file load for safety"),
+			 errhint("remove the file manually or reset statistics in advance")));
+	goto soft_failed_end;
 data_header_error:
-	ereport(ERROR,
+	ereport(WARNING,
 			(errcode(ERRCODE_DATA_CORRUPTED),
 			 errmsg("[%s] file \"%s\" has incompatible header version %d instead of %d",
-			 EXTENSION_NAME, filename, header, DATA_FILE_HEADER)));
+			 EXTENSION_NAME, filename, header, DATA_FILE_HEADER),
+			 errdetail("skip data file load for safety"),
+			 errhint("remove the file manually or reset statistics in advance")));
+	goto soft_failed_end;
 data_version_error:
-	ereport(ERROR,
+	ereport(WARNING,
 			(errcode(ERRCODE_DATA_CORRUPTED),
 			 errmsg("[%s] file \"%s\" has incompatible data format version %d instead of %d",
-			 EXTENSION_NAME, filename, fmtver, DATA_FORMAT_VERSION)));
+			 EXTENSION_NAME, filename, fmtver, DATA_FORMAT_VERSION),
+			 errdetail("skip data file load for safety"),
+			 errhint("remove the file manually or reset statistics in advance")));
+	goto soft_failed_end;
 data_corrupted_error:
-	ereport(ERROR,
+	ereport(WARNING,
 			(errcode(ERRCODE_DATA_CORRUPTED),
 			 errmsg("[%s] file \"%s\" contains invalid entry with queryId "UINT64_FORMAT" and dbOid %u",
 			 EXTENSION_NAME, filename, disk_entry.key.queryId, disk_entry.key.dbOid),
 			 errhint("File may be corrupted")));
+	goto soft_failed_end;
+length_error:
+	ereport(WARNING,
+			(errcode(ERRCODE_DATA_CORRUPTED),
+			 errmsg("[%s] file \"%s\" contains an implausible string length",
+			 EXTENSION_NAME, filename),
+			 errdetail("skip data file load for safety"),
+			 errhint("remove the file manually or reset statistics in advance")));
+	goto soft_failed_end;
 crc_read_error:
-	ereport(ERROR,
+	ereport(WARNING,
 			(errcode(ERRCODE_DATA_CORRUPTED),
 			 errmsg("[%s] file \"%s\" is missing CRC32C checksum",
 			 EXTENSION_NAME, filename),
 			 errdetail("File may be truncated or corrupted"),
 			 errhint("Remove the file manually or reset statistics in advance")));
+	/* FALLTHROUGH */
 soft_failed_end:
 	recreate_htab(state);
 end:
@@ -1363,6 +1426,15 @@ end:
 	return -1;
 }
 
+/*
+ * Backstop wrapper around _load_hash_table().
+ *
+ * All anticipated failure modes are handled softly inside _load_hash_table()
+ * itself (WARNING + empty table), so ordinarily nothing is thrown here.  If
+ * something genuinely unexpected escapes anyway, make sure the half-loaded
+ * hash table is rebuilt before the error propagates, so that later attaches
+ * find a consistent (empty) state.
+ */
 static uint32
 _load_hash_table_safe(TODSMRegistry *state)
 {

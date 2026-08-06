@@ -200,25 +200,21 @@ note("Header byte at offset $header_corrupt_offset changed from " . sprintf("0x%
 note("Restarting server with corrupted header...");
 $node->start;
 
-# Try to load the file - should fail due to header validation
-# Note: Header is validated BEFORE CRC check, so we get an ERROR (not WARNING)
-# Use psql directly since safe_psql will die on ERROR
-my ($header_ret, $header_stdout, $header_stderr) = $node->psql('postgres',
+# The statistics file is an optional cache: a corrupted header must be
+# reported as a WARNING and skipped, never abort the (innocent) user query
+# that happened to trigger the load.
+my $header_ret = $node->safe_psql('postgres',
     'SELECT COUNT(*) FROM pg_track_optimizer;');
+is($header_ret, '0', 'Header corruption: load skipped, user query succeeds');
 
-# The query should fail with an error
-isnt($header_ret, 0, 'Query failed due to header corruption');
-like($header_stderr, qr/has incompatible header version/,
-     'stderr contains header error message');
-
-# Verify the log shows header error (header is checked before CRC)
+# Verify the log shows the header warning (header is checked before CRC)
 my $header_log = slurp_file($node->logfile);
-like($header_log, qr/has incompatible header version/,
-     'Header corruption detected by header validation');
+like($header_log, qr/WARNING:.*has incompatible header version/,
+     'Header corruption detected by header validation as WARNING');
 
-# Verify this is an ERROR (not just WARNING like CRC errors)
-like($header_log, qr/ERROR:.*has incompatible header version/,
-     'Header corruption raises ERROR, not just WARNING');
+# Verify no user-visible ERROR was raised for it
+unlike($header_log, qr/ERROR:.*has incompatible header version/,
+     'Header corruption does not raise ERROR');
 
 # Count total CRC errors - should still be 1 (only the original data corruption)
 # Header corruption is caught before CRC validation
@@ -269,20 +265,17 @@ note("Format version byte changed from " . sprintf("0x%02X", ord($ver_orig_byte)
 note("Restarting with corrupted format version...");
 $node->start;
 
-# Should fail with version error (ERROR, not WARNING)
-my ($ver_ret, $ver_stdout, $ver_stderr) = $node->psql('postgres',
+# Same policy as the header: WARNING + skipped load, the query succeeds
+my $ver_ret = $node->safe_psql('postgres',
     'SELECT COUNT(*) FROM pg_track_optimizer;');
+is($ver_ret, '0', 'Format version corruption: load skipped, user query succeeds');
 
-isnt($ver_ret, 0, 'Query failed due to format version corruption');
-like($ver_stderr, qr/has incompatible data format version/,
-     'stderr contains format version error');
-
-# Verify log shows version error
+# Verify log shows the version warning
 my $version_log = slurp_file($node->logfile);
-like($version_log, qr/has incompatible data format version/,
-     'Format version corruption detected');
-like($version_log, qr/ERROR:.*has incompatible data format version/,
-     'Format version corruption raises ERROR');
+like($version_log, qr/WARNING:.*has incompatible data format version/,
+     'Format version corruption detected as WARNING');
+unlike($version_log, qr/ERROR:.*has incompatible data format version/,
+     'Format version corruption does not raise ERROR');
 
 pass('Format version corruption correctly detected');
 
@@ -341,5 +334,35 @@ like($platver_log, qr/WARNING:.*has been written on different platform/,
      'Platform version mismatch raises WARNING, not ERROR (more graceful)');
 
 pass('Platform version string corruption correctly detected with graceful degradation');
+
+# Test implausible length field - a corrupted length must not drive a
+# multi-gigabyte allocation (the CRC is only verified at the end of the file,
+# so the length has to be sanity-checked before it is used).
+note("Testing implausible string length detection");
+
+$node->stop;
+
+# Craft a file with a valid header and format version but an absurd
+# version-string length (0xFFFFFFFF).
+open(my $fh5, '>:raw', $flush_file) or die "Cannot create $flush_file: $!";
+print $fh5 pack('VVV', 12354678, 20260118, 0xFFFFFFFF)
+    or die "Cannot write crafted file: $!";
+close($fh5);
+
+note("Restarting with implausible version-string length...");
+$node->start;
+
+# WARNING + skipped load; the user query is unaffected
+my $len_ret = $node->safe_psql('postgres',
+    'SELECT COUNT(*) FROM pg_track_optimizer;');
+is($len_ret, '0', 'Implausible length: load skipped, user query succeeds');
+
+my $len_log = slurp_file($node->logfile);
+like($len_log, qr/WARNING:.*contains an implausible string length/,
+     'Implausible length detected as WARNING');
+unlike($len_log, qr/ERROR:.*implausible string length/,
+     'Implausible length does not raise ERROR');
+
+unlink($flush_file);
 
 done_testing();
