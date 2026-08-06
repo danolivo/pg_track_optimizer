@@ -519,6 +519,7 @@ Datum
 rstats_add(PG_FUNCTION_ARGS)
 {
 	RStats *stats = PG_GETARG_RSTATS_P(0);
+	RStats *result;
 	Oid		argtype;
 	double	value;
 
@@ -533,9 +534,17 @@ rstats_add(PG_FUNCTION_ARGS)
 
 	value = get_double_value(PG_GETARG_DATUM(1), argtype);
 
-	rstats_add_value(stats, value);
+	/*
+	 * rstats is a fixed-length pass-by-reference type, so the input datum may
+	 * point straight into a shared buffer page or into a Const of a cached
+	 * plan.  Modifying it in place would corrupt that storage; always work on
+	 * a fresh copy.
+	 */
+	result = (RStats *) palloc(sizeof(RStats));
+	memcpy(result, stats, sizeof(RStats));
+	rstats_add_value(result, value);
 
-	PG_RETURN_RSTATS_P(stats);
+	PG_RETURN_RSTATS_P(result);
 }
 
 /*

@@ -325,6 +325,32 @@ ORDER BY distance;
 
 DROP TABLE query_stats;
 
+-- Operators must not scribble on their input datum
+-- rstats is a fixed-length pass-by-reference type: the input datum of '+' may
+-- point directly into a shared buffer page (when read from a table) or into a
+-- cached plan tree (when const-folded).  The operator must return a freshly
+-- allocated value and leave its input untouched.
+
+-- A stored row must not change when read through the '+' operator
+CREATE TABLE mutation_probe (id int, r rstats);
+INSERT INTO mutation_probe VALUES (1, 10.0::rstats);
+SELECT r + 1.0 AS derived FROM mutation_probe;
+-- The stored value must still have count=1
+SELECT r FROM mutation_probe;
+SELECT r + 1.0 AS derived FROM mutation_probe;
+-- ... no matter how many times the operator has run on it
+SELECT r FROM mutation_probe;
+DROP TABLE mutation_probe;
+
+-- Test 16.2: a Const in a cached plan must not accumulate across executions
+SET plan_cache_mode = force_generic_plan;
+PREPARE mutation_probe_stmt(float8) AS SELECT 10.0::rstats + $1;
+EXECUTE mutation_probe_stmt(1.0);
+EXECUTE mutation_probe_stmt(1.0);
+EXECUTE mutation_probe_stmt(1.0);
+DEALLOCATE mutation_probe_stmt;
+RESET plan_cache_mode;
+
 -- Clean up
 DROP TABLE sensor_data,tmp;
 SELECT * FROM pg_track_optimizer_reset();
