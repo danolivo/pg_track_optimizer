@@ -1519,8 +1519,23 @@ pto_before_shmem_exit(int code, Datum arg)
 
 	elog(DEBUG1, "[%s] saving hash table to the disk", EXTENSION_NAME);
 
-	/* Take exclusive lock to be sure no one flushes the data in parallel */
-	LWLockAcquire(&shared->lock, LW_EXCLUSIVE);
+	/*
+	 * If another backend is flushing right now, skip our flush instead of
+	 * queueing for the lock.  Under connection churn, exiting backends
+	 * otherwise convoy behind this exclusive lock while each rewrites the
+	 * whole file with an fsync; the half-exited backends keep their PGPROC
+	 * slots, pile up, and new connections start failing with "sorry, too
+	 * many clients already".  Leaving need_syncing set delegates the write
+	 * to the next exiting backend (or an explicit flush): whatever the
+	 * current lock holder's table scan has already passed will be picked up
+	 * by that later flush.
+	 */
+	if (!LWLockConditionalAcquire(&shared->lock, LW_EXCLUSIVE))
+	{
+		elog(DEBUG1, "[%s] skipping on-exit flush: another flush is in progress",
+			 EXTENSION_NAME);
+		return;
+	}
 
 	/* On backend shutdown be more careful and ignore errors */
 	PG_TRY();
