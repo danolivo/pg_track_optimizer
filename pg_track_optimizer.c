@@ -37,6 +37,7 @@
 #include "storage/lwlock.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/injection_point.h"
 #include "utils/memutils.h"
 #include "utils/tuplestore.h"
 #include "utils/wait_event.h"
@@ -54,6 +55,13 @@ PG_MODULE_MAGIC_EXT(
 #endif
 
 #define DATATBL_NCOLS	(17)
+
+/* INJECTION_POINT() grew a second argument in PostgreSQL 18 */
+#if PG_VERSION_NUM >= 180000
+#define PGTO_INJECTION_POINT(name) INJECTION_POINT(name, NULL)
+#else
+#define PGTO_INJECTION_POINT(name) INJECTION_POINT(name)
+#endif
 
 typedef struct TODSMRegistry
 {
@@ -119,7 +127,27 @@ typedef struct DSMOptimizerTrackerEntry
 	RStats					njoins;			/* Number of JOIN nodes per execution - running stats */
 	int64					nexecs;				/* Number of executions tracked */
 
-	/* Metadata */
+	/*
+	 * Metadata.
+	 *
+	 * query_ptr doubles as the entry's validity marker.  A writer sets it to
+	 * InvalidDsaPointer as the very first store after inserting the entry and
+	 * assigns the real allocation as the very last store of initialization,
+	 * so an invalid pointer means "initialization did not complete".  Readers
+	 * (sequential scans, flush, reset) skip such entries and the next writer
+	 * of the same key rebuilds them, which keeps a failure anywhere in the
+	 * initialization window - the query text allocation included - from ever
+	 * exposing a half-built entry.
+	 *
+	 * NB: the allocation is therefore performed into a local variable and
+	 * published in a single store.  Keep it the last failure-prone operation
+	 * of the window: an error between a successful allocation and that store
+	 * orphans the allocation (nothing references it, so not even reset can
+	 * reclaim it - only a hash table reset that destroys the DSA does).
+	 *
+	 * Accessed only under the entry's dshash partition lock; LWLock
+	 * acquire/release provides the required memory barriers.
+	 */
 	dsa_pointer				query_ptr;			/* Pointer to query text in shared memory */
 } DSMOptimizerTrackerEntry;
 
@@ -468,6 +496,14 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	key.queryId = queryDesc->plannedstmt->queryId;
 	entry = dshash_find_or_insert(htab, &key, &found);
 
+	if (!found)
+		/*
+		 * A freshly inserted entry holds uninitialized memory, so its
+		 * query_ptr may look like anything.  Mark the entry incomplete with
+		 * the very first store, before any operation that could fail.
+		 */
+		entry->query_ptr = InvalidDsaPointer;
+
 	/*
 	 * Store per-execution statistics (most recent execution only).
 	 * These values are overwritten on each execution, showing only the latest
@@ -476,22 +512,17 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	entry->evaluated_nodes = ctx->nnodes;
 	entry->plan_nodes = ctx->counter;
 
-	if (!found)
+	if (!DsaPointerIsValid(entry->query_ptr))
 	{
-		size_t	len = strlen(queryDesc->sourceText);
-		char   *strptr;
-
-		/* Allocate and store the query string in shared memory */
-		entry->query_ptr = dsa_allocate0(htab_dsa, len + 1);
-		Assert(DsaPointerIsValid(entry->query_ptr));
-		strptr = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
-		strlcpy(strptr, queryDesc->sourceText, len + 1);
+		size_t		len = strlen(queryDesc->sourceText);
+		dsa_pointer	query_ptr;
+		char	   *strptr;
 
 		/*
-		 * Initialize cumulative statistics fields to empty state.
-		 * These will be populated incrementally as values are added via
-		 * rstats_add_value(). The empty state uses sentinel values (-1)
-		 * to indicate no data has been accumulated yet.
+		 * A fresh entry, or one left behind by an initialization that failed
+		 * midway: build it from scratch.  Such an entry owns nothing - the
+		 * query text is published in the same store that marks the entry
+		 * complete - so there is nothing to release first.
 		 */
 		rstats_set_empty(&entry->avg_error);
 		rstats_set_empty(&entry->rms_error);
@@ -507,6 +538,28 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 		entry->nexecs = 0;
 
+		/*
+		 * Allocate the query text last, so that the only failure-prone
+		 * operation of this window sits right next to the store that
+		 * publishes it.  dsa_allocate0() throws on out-of-shared-memory; the
+		 * abort path then releases the partition lock and leaves an entry
+		 * that readers skip and the next execution of this query rebuilds.
+		 */
+		PGTO_INJECTION_POINT("pg_track_optimizer-query-text-alloc");
+		query_ptr = dsa_allocate0(htab_dsa, len + 1);
+		Assert(DsaPointerIsValid(query_ptr));
+		strptr = (char *) dsa_get_address(htab_dsa, query_ptr);
+		strlcpy(strptr, queryDesc->sourceText, len + 1);
+
+		/* This store completes the entry - keep it last */
+		PGTO_INJECTION_POINT("pg_track_optimizer-entry-publish");
+		entry->query_ptr = query_ptr;
+
+		/*
+		 * Global accounting after the entry-local state is complete: an
+		 * incomplete leftover was never counted, so completing it (fresh or
+		 * rebuilt) counts it exactly once.
+		 */
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
 	}
 
@@ -825,17 +878,20 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 		int		i = 0;
 		char   *str;
 
+		CHECK_FOR_INTERRUPTS();
+
+		/* Skip entries whose initialization did not complete */
+		if (!DsaPointerIsValid(entry->query_ptr))
+			continue;
+
 		Assert(entry->key.queryId != UINT64CONST(0) &&
 			   OidIsValid(entry->key.dbOid));
-
-		CHECK_FOR_INTERRUPTS();
 
 		memset(nulls, 0, DATATBL_NCOLS);
 		values[i++] = ObjectIdGetDatum(entry->key.dbOid);
 		values[i++] = Int64GetDatum(entry->key.queryId);
 
-		/* Query string */
-		Assert(DsaPointerIsValid(entry->query_ptr));
+		/* Query string (validity established by the skip above) */
 		str = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
 		values[i++] = CStringGetTextDatum(str);
 
@@ -885,23 +941,29 @@ reset_htab(void)
 	dshash_seq_init(&stat, htab, true);
 	while ((entry = dshash_seq_next(&stat)) != NULL)
 	{
-		Assert(entry->key.queryId != UINT64CONST(0) &&
-			   OidIsValid(entry->key.dbOid));
-
 		CHECK_FOR_INTERRUPTS();
 
-		/* At first, free memory, allocated for the query text */
-		Assert(DsaPointerIsValid(entry->query_ptr));
-		dsa_free(htab_dsa, entry->query_ptr);
+		/*
+		 * An entry whose initialization did not complete owns no query text
+		 * and was never added to htab_counter: just drop it.
+		 */
+		if (DsaPointerIsValid(entry->query_ptr))
+		{
+			Assert(entry->key.queryId != UINT64CONST(0) &&
+				   OidIsValid(entry->key.dbOid));
+
+			/* At first, free memory, allocated for the query text */
+			dsa_free(htab_dsa, entry->query_ptr);
+			pg_atomic_fetch_sub_u32(&shared->htab_counter, 1);
+
+			/*
+			 * htab_counter may be changes simultaneously. So, calculate how
+			 * much entries we removed using a local variable.
+			 */
+			counter++;
+		}
 
 		dshash_delete_current(&stat);
-		pg_atomic_fetch_sub_u32(&shared->htab_counter, 1);
-
-		/*
-		 * htab_counter may be changes simultaneously. So, calculate how much
-		 * entries we removed using a local variable.
-		 */
-		counter++;
 	}
 	dshash_seq_term(&stat);
 
@@ -1038,11 +1100,14 @@ _flush_hash_table(void)
 		char   *str;
 		uint32	len;
 
-		Assert(entry->key.queryId != UINT64CONST(0) &&
-			   OidIsValid(entry->key.dbOid) &&
-			   DsaPointerIsValid(entry->query_ptr));
-
 		CHECK_FOR_INTERRUPTS();
+
+		/* Never persist entries whose initialization did not complete */
+		if (!DsaPointerIsValid(entry->query_ptr))
+			continue;
+
+		Assert(entry->key.queryId != UINT64CONST(0) &&
+			   OidIsValid(entry->key.dbOid));
 
 		str = (char *) dsa_get_address(htab_dsa, entry->query_ptr);
 		len = strlen(str);
@@ -1393,6 +1458,8 @@ _load_hash_table(TODSMRegistry *state)
 		memcpy(&entry->njoins, &disk_entry.njoins, sizeof(RStats));
 
 		entry->nexecs = disk_entry.nexecs;
+
+		/* Publishes the entry, exactly as in store_data(): keep it last */
 		entry->query_ptr = disk_entry.query_ptr;
 
 		dshash_release_lock(htab, entry);
