@@ -263,6 +263,17 @@ track_attach_shmem(void)
 
 	dsa_pin_mapping(htab_dsa);
 	MemoryContextSwitchTo(mctx);
+
+	/*
+	 * Register the on-exit flush callback in this backend.  Registering it
+	 * in _PG_init() is not enough: under shared_preload_libraries _PG_init()
+	 * runs in the postmaster only, whose on_exit callbacks are cleared in
+	 * forked children (and the postmaster itself fails the IsUnderPostmaster
+	 * check in the callback), so auto_flush would never fire anywhere.  This
+	 * function runs once per backend - the htab test above short-circuits
+	 * all later calls - which is exactly the registration point we need.
+	 */
+	before_shmem_exit(pto_before_shmem_exit, (Datum) 0);
 }
 
 /*
@@ -448,7 +459,6 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		entry->nexecs = 0;
 
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
-		pg_atomic_write_u32(&shared->need_syncing, 1); /* New data arrived */
 	}
 
 	/*
@@ -487,6 +497,13 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	Assert(ctx->totaltime >= 0.);
 	rstats_add_value(&entry->exec_time, ctx->totaltime);
 	entry->nexecs++;
+
+	/*
+	 * The in-memory state now differs from what is on disk, whether the
+	 * entry was just created or merely updated.  Tracked accumulations on
+	 * existing entries must reach the disk on exit just like new entries.
+	 */
+	pg_atomic_write_u32(&shared->need_syncing, 1);
 
 	dshash_release_lock(htab, entry);
 
@@ -638,7 +655,11 @@ _PG_init(void)
 	prev_ExecutorEnd = ExecutorEnd_hook;
 	ExecutorEnd_hook = track_ExecutorEnd;
 
-	before_shmem_exit(pto_before_shmem_exit, (Datum) 0);
+	/*
+	 * NB: the on-exit flush callback is registered per backend in
+	 * track_attach_shmem(), not here - _PG_init() may be running in the
+	 * postmaster, whose exit-callback list does not propagate to children.
+	 */
 }
 
 /* -----------------------------------------------------------------------------
@@ -1478,7 +1499,13 @@ pto_before_shmem_exit(int code, Datum arg)
 	MemoryContext	oldcontext = CurrentMemoryContext;
 	volatile bool	success = false;
 
-	if (!IsUnderPostmaster || code != 0 || htab == NULL || !auto_flush)
+	/*
+	 * Flush only on the clean exit of a regular backend.  Parallel workers
+	 * attach to the hash table too, but flushing the whole file on every
+	 * worker exit would be pure overhead - their leader's exit covers it.
+	 */
+	if (!IsUnderPostmaster || IsParallelWorker() || code != 0 ||
+		htab == NULL || !auto_flush)
 		return;
 
 	/* On the backend shutdown flush the data only if something new arrived */
