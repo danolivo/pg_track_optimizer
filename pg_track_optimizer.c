@@ -922,6 +922,7 @@ _flush_hash_table(void)
 	const uint32				verstr_len = strlen(DATA_PG_VERSION_STR);
 	off_t						filepos = 0;
 	pg_crc32c					crc;
+	int							save_errno;
 
 	file = PathNameOpenFile(tmpfile, O_CREAT | O_WRONLY | O_TRUNC | PG_BINARY);
 	if (file < 0)
@@ -1051,12 +1052,16 @@ _flush_hash_table(void)
 
 	/*
 	 * Before throwing an error we should remove (potentially) inconsistent
-	 * temporary file.
+	 * temporary file.  Save errno first: FileClose()/unlink() may clobber it
+	 * and %m below must report the original write failure.
 	 */
 error:
+	save_errno = errno;
+
 	FileClose(file);
 	unlink(tmpfile);
 
+	errno = save_errno;
 	ereport(ERROR,
 			(errcode_for_file_access(),
 			 errmsg("[%s] could not write file \"%s\": %m",
