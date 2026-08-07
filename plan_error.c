@@ -39,7 +39,8 @@ prediction_walker(PlanState *pstate, void *context)
 	tmp_counter = ctx->counter;
 	planstate_tree_walker(pstate, prediction_walker, context);
 
-	if (pstate->subPlan != NIL)
+	/* The SubPlan factor is a time ratio: nothing to compute without timing */
+	if (pstate->subPlan != NIL && ctx->has_timing)
 	{
 		/*
 		 * Analyze SubPlans to find the worst cost factor.
@@ -119,14 +120,19 @@ prediction_walker(PlanState *pstate, void *context)
 
 	InstrEndLoop(pstate->instrument);
 	nloops = pstate->instrument->nloops;
+	if (ctx->has_timing)
+	{
 #if PG_VERSION_NUM >= 190000
-	node_time = INSTR_TIME_IS_ZERO(pstate->instrument->instr.total) ? 0.0 :
-					INSTR_TIME_GET_MILLISEC(pstate->instrument->instr.total);
+		node_time = INSTR_TIME_IS_ZERO(pstate->instrument->instr.total) ? 0.0 :
+						INSTR_TIME_GET_MILLISEC(pstate->instrument->instr.total);
 #else
-	node_time = pstate->instrument->total * 1000.;
+		node_time = pstate->instrument->total * 1000.;
 #endif
+	}
+	else
+		node_time = 0.0;
 
-	if (nloops <= 0.0 || node_time <= 0.0)
+	if (nloops <= 0.0 || (ctx->has_timing && node_time <= 0.0))
 		/*
 		 * Skip 'never executed' case or "0-Tuple situation" and the case of
 		 * manual switching off of the timing instrumentation
@@ -276,8 +282,13 @@ prediction_walker(PlanState *pstate, void *context)
 	node_error = fabs(log(real_rows / plan_rows));
 	ctx->avg_error += node_error;
 	ctx->rms_error += node_error * node_error;
-	relative_time = node_time / pstate->instrument->nloops / ctx->totaltime;
-	ctx->twa_error += node_error * relative_time;
+	if (ctx->has_timing)
+	{
+		relative_time = node_time / pstate->instrument->nloops / ctx->totaltime;
+		ctx->twa_error += node_error * relative_time;
+	}
+	else
+		relative_time = 0.0;
 
 	/* Don't forget about very rare potential case of zero cost */
 	if (ctx->totalcost > 0.)
@@ -307,16 +318,20 @@ prediction_walker(PlanState *pstate, void *context)
 		IsA(pstate->plan, HashJoin) ||
 		IsA(pstate->plan, MergeJoin))
 	{
-		double jf_factor = ((pstate->instrument->nfiltered1 +
-								 pstate->instrument->nfiltered2) / nloops);
-
 		ctx->njoins++;
 
-		if (jf_factor > 0.)
-			jf_factor *= relative_time / real_rows;
+		/* The factor is time-weighted: meaningless without per-node timing */
+		if (ctx->has_timing)
+		{
+			double jf_factor = ((pstate->instrument->nfiltered1 +
+									 pstate->instrument->nfiltered2) / nloops);
 
-		if (jf_factor > ctx->f_join_filter)
-			ctx->f_join_filter = jf_factor;
+			if (jf_factor > 0.)
+				jf_factor *= relative_time / real_rows;
+
+			if (jf_factor > ctx->f_join_filter)
+				ctx->f_join_filter = jf_factor;
+		}
 	}
 
 	/*
@@ -334,7 +349,7 @@ prediction_walker(PlanState *pstate, void *context)
 	 * time-weighted filtering cost. This helps surface scans that would benefit
 	 * most from better indexing or predicate pushdown.
 	 */
-	if (tmp_counter == ctx->counter)
+	if (tmp_counter == ctx->counter && ctx->has_timing)
 	{
 		double	lf_factor = (pstate->instrument->nfiltered1 / nloops);
 
@@ -360,6 +375,12 @@ double
 plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 {
 	PlanState  *pstate = queryDesc->planstate;
+
+	/*
+	 * Per-node timing is only collected at effort >= timing; the query-level
+	 * instrumentation (totaltime, buffer usage) is always present.
+	 */
+	ctx->has_timing = (queryDesc->instrument_options & INSTRUMENT_TIMER) != 0;
 
 	ctx->avg_error = 0.;
 	ctx->rms_error = 0.;
@@ -414,12 +435,19 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	ctx->temp_blks = queryDesc->totaltime->bufusage.temp_blks_written;
 #endif
 
-	/* Initialize JOIN filtering statistics */
-	ctx->f_join_filter = 0.;
-	/* Initialize leaf node filtering statistics */
-	ctx->f_scan_filter = 0.;
-	/* No subplans has been evaluated yet */
-	ctx->f_worst_splan = 0.;
+	/*
+	 * Initialize the time-weighted factors: to their running maxima when
+	 * per-node timing is available, to the -1 'not collected' sentinel
+	 * otherwise so that store_data() skips them.
+	 */
+	if (ctx->has_timing)
+	{
+		ctx->f_join_filter = 0.;
+		ctx->f_scan_filter = 0.;
+		ctx->f_worst_splan = 0.;
+	}
+	else
+		ctx->f_join_filter = ctx->f_scan_filter = ctx->f_worst_splan = -1.;
 
 	(void) prediction_walker(pstate, (void *) ctx);
 
@@ -428,7 +456,10 @@ plan_error(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	{
 		ctx->avg_error /= ctx->nnodes;
 		ctx->rms_error = sqrt(ctx->rms_error / ctx->nnodes);
-		ctx->twa_error /= ctx->nnodes;
+		if (ctx->has_timing)
+			ctx->twa_error /= ctx->nnodes;
+		else
+			ctx->twa_error = -1.;	/* not collected at this effort level */
 		ctx->wca_error /= ctx->nnodes;
 	}
 	else

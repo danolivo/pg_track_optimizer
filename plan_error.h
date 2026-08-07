@@ -27,6 +27,14 @@
  */
 typedef struct PlanEstimatorContext
 {
+	/*
+	 * Whether per-node timing (INSTRUMENT_TIMER) was collected for this
+	 * execution.  Without it, the time-weighted metrics (twa_error and the
+	 * f_* factors) are reported as -1 and skipped by the accumulator.
+	 * Query-level totaltime is always available regardless.
+	 */
+	bool	has_timing;
+
 	double	totaltime; /* In msecs */
 	double	totalcost;
 

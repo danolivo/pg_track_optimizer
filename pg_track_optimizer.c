@@ -166,10 +166,58 @@ static const struct config_enum_entry format_options[] = {
 	{NULL, 0, false}
 };
 
+/*
+ * Instrumentation effort levels.  The per-tuple cost of tracking is driven
+ * by which executor instrumentation we request, so let the user choose how
+ * much to pay:
+ *
+ * - ROWS: per-node row counters only.  No clock reads.  Still computes the
+ *   estimation-error metrics that drive detection (avg/rms/wca error) plus
+ *   query-level execution time and buffer statistics, which come from the
+ *   cheap query-level instrumentation.  Time-weighted metrics (twa_error,
+ *   filter factors, SubPlan factor) are not collected.
+ * - TIMING: adds per-node INSTRUMENT_TIMER - two clock reads per tuple per
+ *   node - enabling all time-weighted metrics.  This is the default and
+ *   matches the historical behaviour metric-wise.
+ * - FULL: adds per-node INSTRUMENT_BUFFERS and includes buffer usage in the
+ *   logged EXPLAIN output.  The per-node buffer counters are not used for
+ *   any stored metric (block statistics come from the query-level
+ *   instrumentation), so this level is only useful when the logged plans
+ *   need per-node buffer detail.
+ */
+typedef enum
+{
+	TRACK_EFFORT_ROWS,
+	TRACK_EFFORT_TIMING,
+	TRACK_EFFORT_FULL,
+} TrackEffort;
+
+static const struct config_enum_entry effort_options[] = {
+	{"rows", TRACK_EFFORT_ROWS, false},
+	{"timing", TRACK_EFFORT_TIMING, false},
+	{"full", TRACK_EFFORT_FULL, false},
+	{NULL, 0, false}
+};
+
 static int track_mode = TRACK_MODE_DISABLED;
+static int track_effort = TRACK_EFFORT_TIMING;
 static double log_min_error = -1.0;
 static int hash_mem = 4096;
 static bool auto_flush = true;
+
+/* Per-plan-node instrumentation flags implied by the current effort level */
+static inline int
+effort_instrument_options(void)
+{
+	int		options = INSTRUMENT_ROWS;
+
+	if (track_effort >= TRACK_EFFORT_TIMING)
+		options |= INSTRUMENT_TIMER;
+	if (track_effort >= TRACK_EFFORT_FULL)
+		options |= INSTRUMENT_BUFFERS;
+
+	return options;
+}
 
 void _PG_init(void);
 
@@ -286,7 +334,7 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 
 	if (track_optimizer_enabled(queryDesc, eflags))
 	{
-		queryDesc->instrument_options |= INSTRUMENT_TIMER | INSTRUMENT_ROWS | INSTRUMENT_BUFFERS;
+		queryDesc->instrument_options |= effort_instrument_options();
 #if PG_VERSION_NUM >= 190000
 		/*
 		 * Ask core to set up query-level instrumentation for us.  This MUST
@@ -342,13 +390,14 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 #endif
 	/*
 	 * We are triggered by an estimation error. So, show only the options which
-	 * can be useful to determine a possible solution.
+	 * can be useful to determine a possible solution.  Timing and buffers in
+	 * the printed plan reflect what the current effort level collected.
 	 */
-	es->analyze = (queryDesc->instrument_options);
+	es->analyze = (queryDesc->instrument_options & INSTRUMENT_ROWS) != 0;
 	es->verbose = false;
-	es->buffers = false;
+	es->buffers = (queryDesc->instrument_options & INSTRUMENT_BUFFERS) != 0;
 	es->wal = false;
-	es->timing = true;
+	es->timing = (queryDesc->instrument_options & INSTRUMENT_TIMER) != 0;
 	es->summary = true;
 	es->format = EXPLAIN_FORMAT_TEXT;
 	es->settings = true;
@@ -484,12 +533,18 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	rstats_add_value(&entry->blks_accessed, (double) ctx->blks_accessed);
 	Assert(ctx->temp_blks >= 0);
 	rstats_add_value(&entry->temp_blks, (double) ctx->temp_blks);
-	Assert(ctx->f_join_filter >= 0.);
-	rstats_add_value(&entry->f_join_filter, ctx->f_join_filter);
-	Assert(ctx->f_scan_filter >= 0.);
-	rstats_add_value(&entry->f_scan_filter, ctx->f_scan_filter);
-	Assert(ctx->f_worst_splan >= 0.);
-	rstats_add_value(&entry->f_worst_splan, ctx->f_worst_splan);
+
+	/*
+	 * Time-weighted factors are only computed when per-node timing was
+	 * collected (effort >= timing); plan_error() reports -1 otherwise and
+	 * the running statistics simply accumulate fewer samples.
+	 */
+	if (ctx->f_join_filter >= 0.)
+		rstats_add_value(&entry->f_join_filter, ctx->f_join_filter);
+	if (ctx->f_scan_filter >= 0.)
+		rstats_add_value(&entry->f_scan_filter, ctx->f_scan_filter);
+	if (ctx->f_worst_splan >= 0.)
+		rstats_add_value(&entry->f_worst_splan, ctx->f_worst_splan);
 	Assert(ctx->njoins >= 0);
 	rstats_add_value(&entry->njoins, (double) ctx->njoins);
 
@@ -535,7 +590,6 @@ track_ExecutorEnd(QueryDesc *queryDesc)
 
 	/* TODO: need shared state 'status' instead of assertions */
 	Assert(queryDesc->planstate->instrument &&
-		   queryDesc->instrument_options & INSTRUMENT_TIMER &&
 		   queryDesc->instrument_options & INSTRUMENT_ROWS);
 
 	/*
@@ -607,6 +661,21 @@ _PG_init(void)
 							 &track_mode,
 							 TRACK_MODE_DISABLED,
 							 format_options,
+							 PGC_SUSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL);
+
+	DefineCustomEnumVariable("pg_track_optimizer.effort",
+							 "Instrumentation effort spent on tracked queries",
+							 "rows: row counters only - cheapest, estimation-error"
+							 " metrics still collected; timing: adds per-node timing"
+							 " and the time-weighted metrics (default); full: adds"
+							 " per-node buffer accounting to the logged EXPLAIN",
+							 &track_effort,
+							 TRACK_EFFORT_TIMING,
+							 effort_options,
 							 PGC_SUSET,
 							 0,
 							 NULL,

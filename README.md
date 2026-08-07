@@ -94,6 +94,26 @@ SET pg_track_optimizer.mode = 'forced';
 SET pg_track_optimizer.mode = 'normal';
 ```
 
+#### `pg_track_optimizer.effort`
+How much executor instrumentation tracked queries pay for.  The per-tuple
+instrumentation cost dominates the extension's overhead on row-heavy plans
+(see `devdocs/benchmarking.md`), so pick the level that matches what you
+need:
+
+- **`rows`**: per-node row counters only - no per-tuple clock reads.  The
+  estimation-error metrics that drive detection (`avg_error`, `rms_error`,
+  `wca_error`), execution time, and block statistics are all still
+  collected.  Time-weighted metrics (`twa_error`, join/scan filter factors,
+  SubPlan factor) are skipped and simply accumulate no samples.
+- **`timing`** (default): adds per-node timing, enabling every metric.
+- **`full`**: additionally collects per-node buffer usage and includes it
+  in the logged EXPLAIN output.  No stored metric depends on it.
+
+```sql
+-- Cheap always-on estimation-error tracking for row-heavy workloads
+SET pg_track_optimizer.effort = 'rows';
+```
+
 #### `pg_track_optimizer.log_min_error`
 Threshold for logging query plans to PostgreSQL log.
 
