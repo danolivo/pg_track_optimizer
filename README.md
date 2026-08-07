@@ -39,12 +39,11 @@ Queries with high error values are candidates for investigation: missing indexes
 -  **Automatic detection** of queries with poor cardinality estimates
 -  **Multiple error metrics** to identify different types of issues
 -  **Shared memory tracking** - zero disk overhead during operation
--  **Measured overhead** -
-   negligible while disabled; 2-6% on cached OLTP point lookups in
-   `normal` mode, but 38-44% on tuple-heavy scans and joins (per-tuple
-   timing instrumentation, the same tax as `EXPLAIN ANALYZE`); `forced`
-   mode additionally loses >50% at 60+ concurrent clients on a hot query
-   (store-path lock contention). See `benchmarking.md` for details
+-  **Measured overhead** - within noise while disabled; 2-5% on cached OLTP
+   point lookups in `normal` mode; on tuple-heavy scans and joins 35-42%
+   with `effort = timing`, within a few percent with `effort = rows`;
+   `forced` mode loses 55-62% at 60-120 clients executing the same query.
+   Full table in [`benchmarking.md`](benchmarking.md)
 -  **Query logging** - automatically log EXPLAIN for problematic queries
 -  **Persistent storage** - optional flush to disk for long-term analysis
 -  **Flexible modes** - track all queries or only problematic ones
@@ -97,8 +96,8 @@ SET pg_track_optimizer.mode = 'normal';
 #### `pg_track_optimizer.effort`
 How much executor instrumentation tracked queries pay for.  The per-tuple
 instrumentation cost dominates the extension's overhead on row-heavy plans
-(see `devdocs/benchmarking.md`), so pick the level that matches what you
-need:
+(see [`benchmarking.md`](benchmarking.md)), so pick the level that matches
+what you need:
 
 - **`rows`**: per-node row counters only - no per-tuple clock reads.  The
   estimation-error metrics that drive detection (`avg_error`, `rms_error`,
@@ -145,6 +144,25 @@ SELECT pg_reload_conf();
 ```
 
 This parameter can only be changed by superusers. When enabled, statistics are automatically persisted to disk when backends shut down, ensuring data is not lost on normal server restarts. Disabling this may be useful in high-throughput environments where the flush overhead is undesirable.
+
+### Choosing `mode` and `effort`
+
+`log_min_error` decides which queries are stored and logged; it does not
+decide which queries are instrumented. In `normal` mode every executed
+query carries the instrumentation that `effort` selects, whether or not it
+ends up crossing the threshold. `forced` adds a hash table update on every
+execution.
+
+| Situation | Suggested setting |
+|---|---|
+| Extension preloaded, tracking not wanted right now | `mode = disabled` |
+| Production OLTP, short queries | `mode = normal`, any `effort` |
+| Production with scans, joins or analytical queries | `mode = normal`, `effort = rows` |
+| Investigating a specific workload, moderate concurrency | `mode = forced` |
+| Time-weighted metrics needed (`twa_error`, filter and SubPlan factors) | `effort = timing` or `full` |
+
+Measured throughput for every combination of the two parameters is in
+[`benchmarking.md`](benchmarking.md).
 
 ## Usage
 
@@ -362,14 +380,21 @@ differences in plan output across PostgreSQL versions.
 
 ## Performance Impact
 
-The extension is designed for production use with minimal overhead:
-- **Hook overhead**: ~1-2% in `forced` mode, negligible in `normal` mode
+Measured on 60 vCPU with the dataset fully cached; the full table, test
+conditions and workload definitions are in
+[`benchmarking.md`](benchmarking.md).
+
+- **`disabled`**: within measurement noise on every workload.
+- **`normal`**: 2-5% on point lookups, at 1 to 120 concurrent clients. On
+  plans that move many tuples the cost follows `effort`: `rows` stays
+  within a few percent, `timing` and `full` cost 35-42%.
+- **`forced`**: 4-7% up to 16 concurrent clients; at 60-120 clients
+  executing the same query, throughput drops by 55-62%.
 - **Memory**: Configurable via `hash_mem`, typically 1-10 MB
 - **I/O**: None during operation; flush occurs on explicit call or backend shutdown (configurable via `auto_flush`)
 
-**Important note on queryId generation**: Approximately 95% of the overhead comes from queryId computation. If you already have `compute_query_id` enabled (e.g., by using `pg_stat_statements` or other extensions), the additional overhead from pg_track_optimizer becomes nearly undetectable.
-
-In `normal` mode with a reasonable threshold (e.g., 2.0), only a small fraction of queries are tracked, making the overhead virtually undetectable.
+See [Choosing `mode` and `effort`](#choosing-mode-and-effort) for how these
+numbers map onto the settings.
 
 ## PGXN Distribution
 
