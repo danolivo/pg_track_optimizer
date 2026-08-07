@@ -351,6 +351,21 @@ EXECUTE mutation_probe_stmt(1.0);
 DEALLOCATE mutation_probe_stmt;
 RESET plan_cache_mode;
 
+-- No dangling shell operators
+-- The '+' operators used to declare COMMUTATOR = +, which minted shell
+-- operators (float8 + rstats), (integer + rstats) with no implementation:
+-- using one failed with "operator is only a shell".  Only the two real
+-- operators must exist.
+SELECT o.oprname, o.oprleft::regtype AS leftarg,
+       o.oprright::regtype AS rightarg, o.oprcode
+FROM pg_operator o
+WHERE (o.oprleft = 'rstats'::regtype OR o.oprright = 'rstats'::regtype)
+  AND o.oprname = '+'
+ORDER BY 2, 3;
+
+-- Reversed-argument addition is simply undefined
+SELECT 1.0::float8 + rstats(2.0);
+
 -- Clean up
 DROP TABLE sensor_data,tmp;
 SELECT * FROM pg_track_optimizer_reset();

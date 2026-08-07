@@ -115,11 +115,14 @@ LANGUAGE C IMMUTABLE STRICT;
 COMMENT ON FUNCTION rstats_add(rstats, integer)
   IS 'Add a new integer value to running statistics';
 
+-- No COMMUTATOR here: declaring one would mint a shell operator
+-- (double precision + rstats) with no implementation behind it.  The
+-- operation is not commutative anyway - the value is folded INTO the
+-- statistics object, so only the (rstats, value) form exists.
 CREATE OPERATOR + (
   LEFTARG  = rstats,
   RIGHTARG = double precision,
-  FUNCTION = rstats_add,
-  COMMUTATOR = +
+  FUNCTION = rstats_add
 );
 COMMENT ON OPERATOR + (rstats, double precision)
   IS 'Add a double value to running statistics';
@@ -127,8 +130,7 @@ COMMENT ON OPERATOR + (rstats, double precision)
 CREATE OPERATOR + (
   LEFTARG  = rstats,
   RIGHTARG = integer,
-  FUNCTION = rstats_add,
-  COMMUTATOR = +
+  FUNCTION = rstats_add
 );
 COMMENT ON OPERATOR + (rstats, integer)
   IS 'Add an integer value to running statistics';
