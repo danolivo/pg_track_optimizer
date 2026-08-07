@@ -711,9 +711,10 @@ pg_track_optimizer_status(PG_FUNCTION_ARGS)
 /*
  * Return all tracked query statistics for the current database.
  *
- * Access control for this view is intentionally left to the DBA (e.g., via
- * GRANT/REVOKE on the function or view). This keeps the extension lightweight
- * and simple, avoiding the overhead of per-row visibility checks.
+ * This exposes query texts of all users and databases, so EXECUTE is revoked
+ * from PUBLIC in the install script; the DBA delegates access with GRANT.
+ * There are no per-row visibility checks - whoever is granted access sees
+ * everything - which keeps the extension lightweight and simple.
  */
 Datum
 pg_track_optimizer(PG_FUNCTION_ARGS)
@@ -842,14 +843,13 @@ reset_htab(void)
 	return counter;
 }
 
+/*
+ * No hardcoded superuser check here: EXECUTE is revoked from PUBLIC in the
+ * install script, and the DBA may delegate the privilege with GRANT.
+ */
 Datum
 to_reset(PG_FUNCTION_ARGS)
 {
-	if (!superuser())
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to reset pg_track_optimizer statistics")));
-
 	PG_RETURN_UINT32(reset_htab());
 }
 
@@ -1453,15 +1453,14 @@ _load_hash_table_safe(TODSMRegistry *state)
 	return nrecs;
 }
 
+/*
+ * No hardcoded superuser check here: EXECUTE is revoked from PUBLIC in the
+ * install script, and the DBA may delegate the privilege with GRANT.
+ */
 Datum
 to_flush(PG_FUNCTION_ARGS)
 {
 	uint32 counter;
-
-	if (!superuser())
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to flush pg_track_optimizer statistics")));
 
 	track_attach_shmem();
 

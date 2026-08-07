@@ -332,3 +332,23 @@ CREATE VIEW pg_track_optimizer_status AS
 
 COMMENT ON VIEW pg_track_optimizer_status IS
   'Current status of the pg_track_optimizer extension';
+
+/* *****************************************************************************
+ *
+ * Access control
+ *
+ * The tracked data includes query texts of all users and all databases, so
+ * reading or managing it is restricted to superusers by default.  The DBA
+ * can delegate with plain GRANTs.  Note that reading through the view needs
+ * both SELECT on the view and EXECUTE on the pg_track_optimizer() function:
+ * function permissions inside a view are checked as the calling user.
+ *
+ * ****************************************************************************/
+
+REVOKE ALL ON FUNCTION pg_track_optimizer() FROM PUBLIC;
+REVOKE ALL ON pg_track_optimizer FROM PUBLIC;
+REVOKE ALL ON FUNCTION pg_track_optimizer_flush() FROM PUBLIC;
+REVOKE ALL ON FUNCTION pg_track_optimizer_reset() FROM PUBLIC;
+
+-- Status contains no query texts and may stay generally readable.
+GRANT SELECT ON pg_track_optimizer_status TO PUBLIC;
