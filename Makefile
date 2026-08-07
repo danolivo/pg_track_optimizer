@@ -26,6 +26,9 @@ else
 subdir = contrib/pg_track_optimizer
 top_builddir = ../..
 EXTRA_REGRESS_OPTS=--temp-config=$(top_srcdir)/$(subdir)/pg_track_optimizer.conf
+# 004_torn_entry_injection.pl needs the injection_points extension, which the
+# top-level "install" target does not cover.
+EXTRA_INSTALL = src/test/modules/injection_points
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
