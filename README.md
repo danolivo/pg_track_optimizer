@@ -39,7 +39,12 @@ Queries with high error values are candidates for investigation: missing indexes
 -  **Automatic detection** of queries with poor cardinality estimates
 -  **Multiple error metrics** to identify different types of issues
 -  **Shared memory tracking** - zero disk overhead during operation
--  **Minimal performance impact** - efficient executor hooks
+-  **Measured overhead** -
+   negligible while disabled; 2-6% on cached OLTP point lookups in
+   `normal` mode, but 38-44% on tuple-heavy scans and joins (per-tuple
+   timing instrumentation, the same tax as `EXPLAIN ANALYZE`); `forced`
+   mode additionally loses >50% at 60+ concurrent clients on a hot query
+   (store-path lock contention). See `benchmarking.md` for details
 -  **Query logging** - automatically log EXPLAIN for problematic queries
 -  **Persistent storage** - optional flush to disk for long-term analysis
 -  **Flexible modes** - track all queries or only problematic ones
