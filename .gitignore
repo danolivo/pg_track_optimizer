@@ -1,0 +1,15 @@
+# PGXS build outputs
+*.o
+*.so
+*.bc
+.deps/
+
+# Test artifacts
+results/
+regression.diffs
+regression.out
+tmp_check/
+log/
+
+# PGXN distribution archive
+pg_track_optimizer-*.zip
