@@ -314,14 +314,20 @@ LANGUAGE C STRICT VOLATILE;
  * pg_track_optimizer_status - Return current extension status.
  *
  * Returns:
- *   mode          - current tracking mode ('disabled', 'normal', or 'forced')
- *   entries_left  - current number of entries to be filled
- *   is_synced     - whether the hash table is synced with disk
+ *   mode       - current tracking mode ('disabled', 'normal', or 'forced')
+ *   entries    - number of queries currently tracked
+ *   mem_used   - bytes of the pg_track_optimizer.hash_mem budget charged to
+ *                those entries, query texts included
+ *   dsa_size   - shared memory the extension really occupies, i.e. mem_used
+ *                plus the allocator's own overhead
+ *   is_synced  - whether the hash table is synced with disk
  */
 CREATE FUNCTION pg_track_optimizer_status(
-	OUT mode          text,
-	OUT entries_left  integer,
-	OUT is_synced     boolean
+	OUT mode       text,
+	OUT entries    bigint,
+	OUT mem_used   bigint,
+	OUT dsa_size   bigint,
+	OUT is_synced  boolean
 )
 RETURNS record
 AS 'MODULE_PATHNAME', 'pg_track_optimizer_status'

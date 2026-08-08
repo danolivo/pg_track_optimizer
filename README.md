@@ -124,12 +124,30 @@ SET pg_track_optimizer.log_min_error = 2.0;
 When a query exceeds this threshold in `normal` mode, its EXPLAIN ANALYZE output is written to the PostgreSQL log file.
 
 #### `pg_track_optimizer.hash_mem`
-Memory limit (in KB) for the shared memory hash table.
+Memory budget for the shared memory hash table (default `4MB`). It covers
+everything the table stores: the fixed-size entries *and* the query texts,
+which are variable-length and usually the larger half. Changing it requires a
+configuration reload — it governs a cluster-wide resource, so it cannot be set
+per session.
 
 ```sql
 -- Allow 10MB for query tracking
-SET pg_track_optimizer.hash_mem = 10240;
+ALTER SYSTEM SET pg_track_optimizer.hash_mem = '10MB';
+SELECT pg_reload_conf();
 ```
+
+Two caveats when sizing it:
+
+- It bounds what the extension *requests*, not what the shared memory allocator
+  consumes. Entry and text allocations are rounded up to allocation size
+  classes, and the table's own bookkeeping is not charged, so the real
+  footprint runs roughly 1.2–1.5× `mem_used`. The floor is the 1 MB initial
+  segment, which a `hash_mem` below that cannot reduce. Compare `dsa_size`
+  with `mem_used` in `pg_track_optimizer_status` to see the actual ratio for
+  your workload.
+- *Lowering* it below what the saved statistics file needs makes the next
+  server start refuse the file — with a warning naming the shortfall — and
+  begin with an empty table. Flush and archive first if the history matters.
 
 #### `pg_track_optimizer.auto_flush`
 Controls automatic flushing of statistics to disk on backend shutdown.
@@ -278,20 +296,23 @@ SELECT * FROM pg_track_optimizer_status;
 
 **Example output:**
 ```
-  mode  | entries_left | is_synced
---------+--------------+-----------
- normal |         9847 | f
+  mode  | entries | mem_used | dsa_size | is_synced
+--------+---------+----------+----------+-----------
+ normal |     412 |   671744 |  1048576 | f
 ```
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `mode` | text | Current tracking mode: `disabled`, `normal`, or `forced` |
-| `entries_left` | integer | Remaining capacity in the hash table for new query entries |
+| `entries` | bigint | Number of queries currently tracked |
+| `mem_used` | bigint | Bytes of the `hash_mem` budget charged to those entries, query texts included |
+| `dsa_size` | bigint | Shared memory the extension really occupies: `mem_used` plus allocator overhead |
 | `is_synced` | boolean | Whether current statistics have been flushed to disk (`true` = synced, `false` = pending changes) |
 
 This is useful for:
 - Verifying the extension is enabled and in the expected mode
-- Monitoring hash table capacity to avoid silent drops (when full, new queries are silently ignored)
+- Monitoring `mem_used` against `hash_mem` to avoid silent drops (once the budget is spent, new queries are silently ignored)
+- Sizing `hash_mem` against the real footprint, by comparing `dsa_size` with `mem_used`
 - Checking if statistics need to be flushed before maintenance or shutdown
 
 ## Interpreting Results
@@ -390,7 +411,8 @@ conditions and workload definitions are in
   within a few percent, `timing` and `full` cost 35-42%.
 - **`forced`**: 4-7% up to 16 concurrent clients; at 60-120 clients
   executing the same query, throughput drops by 55-62%.
-- **Memory**: Configurable via `hash_mem`, typically 1-10 MB
+- **Memory**: Configurable via `hash_mem`, typically 1-10 MB; entries and
+  query texts are charged against it together
 - **I/O**: None during operation; flush occurs on explicit call or backend shutdown (configurable via `auto_flush`)
 
 See [Choosing `mode` and `effort`](#choosing-mode-and-effort) for how these

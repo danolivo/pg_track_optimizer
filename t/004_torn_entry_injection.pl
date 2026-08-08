@@ -68,8 +68,9 @@ sub run_with_failing_point
 }
 
 # Assert the invariants that must hold after any interrupted initialization:
-# nothing visible to readers, flush unaffected, and the next execution of
-# the same query rebuilds the entry.
+# nothing visible to readers, flush unaffected, the next execution of the same
+# query rebuilds the entry, and the memory budget is charged for that rebuild
+# exactly once.
 sub check_entry_invariants
 {
 	my ($node, $label, $query, $pattern) = @_;
@@ -85,6 +86,11 @@ sub check_entry_invariants
 		'SELECT pg_track_optimizer_flush() >= 0;');
 	is($flushed, 't', "$label: flush succeeds with an incomplete entry present");
 
+	# An incomplete entry owns nothing and was never charged, so the rebuild
+	# below is what pays for it - and must pay exactly once.
+	my ($entries_before, $mem_before) = split /\|/, $node->safe_psql('postgres',
+		'SELECT entries, mem_used FROM pg_track_optimizer_status');
+
 	# The injection point died with its session, so this execution succeeds
 	# and must adopt the entry left behind by the failed one.
 	$node->safe_psql('postgres', qq{
@@ -97,6 +103,15 @@ sub check_entry_invariants
 		  AND query NOT LIKE '%pg_track_optimizer%';
 	});
 	is($nexecs, '1', "$label: the entry was rebuilt by the next execution");
+
+	my ($entries_after, $mem_after) = split /\|/, $node->safe_psql('postgres',
+		'SELECT entries, mem_used FROM pg_track_optimizer_status');
+	is($entries_after - $entries_before, 1,
+		"$label: the rebuild adds exactly one counted entry");
+	cmp_ok($mem_after, '>', $mem_before,
+		"$label: the rebuilt entry is charged against the budget");
+	cmp_ok($mem_after, '<=', 4 * 1024 * 1024,
+		"$label: the charge stays inside the default hash_mem");
 }
 
 # Scenario 1: the query-text allocation fails.  This is the realistic case -

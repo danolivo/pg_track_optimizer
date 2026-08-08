@@ -1,7 +1,15 @@
 CREATE EXTENSION pg_track_optimizer;
 SELECT * FROM pg_track_optimizer_reset();
 
-SELECT mode,entries_left,is_synced
+-- Absolute byte figures depend on the platform, so check the invariants that
+-- must hold whatever they are: the charge stays inside the budget, and the
+-- real footprint covers the charge.
+SELECT mode, entries > 0 AS has_entries,
+       mem_used > 0 AS has_used,
+       mem_used <= pg_size_bytes(current_setting('pg_track_optimizer.hash_mem'))
+         AS within_budget,
+       dsa_size >= mem_used AS dsa_covers_the_charge,
+       is_synced
 FROM pg_track_optimizer_status;
 
 \d pg_track_optimizer

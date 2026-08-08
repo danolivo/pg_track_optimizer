@@ -5,11 +5,19 @@ SELECT * FROM pg_track_optimizer_reset();
                         0
 (1 row)
 
-SELECT mode,entries_left,is_synced
+-- Absolute byte figures depend on the platform, so check the invariants that
+-- must hold whatever they are: the charge stays inside the budget, and the
+-- real footprint covers the charge.
+SELECT mode, entries > 0 AS has_entries,
+       mem_used > 0 AS has_used,
+       mem_used <= pg_size_bytes(current_setting('pg_track_optimizer.hash_mem'))
+         AS within_budget,
+       dsa_size >= mem_used AS dsa_covers_the_charge,
+       is_synced
 FROM pg_track_optimizer_status;
-  mode  | entries_left | is_synced 
---------+--------------+-----------
- forced |         8737 | f
+  mode  | has_entries | has_used | within_budget | dsa_covers_the_charge | is_synced 
+--------+-------------+----------+---------------+-----------------------+-----------
+ forced | t           | t        | t             | t                     | f
 (1 row)
 
 \d pg_track_optimizer
@@ -92,12 +100,14 @@ FROM pg_track_optimizer_status;
 (1 row)
 
 \d pg_track_optimizer_status
-         View "public.pg_track_optimizer_status"
-    Column    |  Type   | Collation | Nullable | Default 
---------------+---------+-----------+----------+---------
- mode         | text    |           |          | 
- entries_left | integer |           |          | 
- is_synced    | boolean |           |          | 
+       View "public.pg_track_optimizer_status"
+  Column   |  Type   | Collation | Nullable | Default 
+-----------+---------+-----------+----------+---------
+ mode      | text    |           |          | 
+ entries   | bigint  |           |          | 
+ mem_used  | bigint  |           |          | 
+ dsa_size  | bigint  |           |          | 
+ is_synced | boolean |           |          | 
 
 SELECT * FROM pg_track_optimizer_reset();
  pg_track_optimizer_reset 
