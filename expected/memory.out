@@ -1,0 +1,100 @@
+-- Memory accounting: pg_track_optimizer.hash_mem bounds the entries and the
+-- query texts together, and pg_track_optimizer.max_query_size caps what one
+-- entry may contribute.
+CREATE EXTENSION pg_track_optimizer;
+SELECT * FROM pg_track_optimizer_reset();
+ pg_track_optimizer_reset 
+--------------------------
+                        0
+(1 row)
+
+-- A long query text is truncated to max_query_size, never beyond it.
+SET pg_track_optimizer.max_query_size = 64;
+SELECT 1 AS x /* aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa */;
+ x 
+---
+ 1
+(1 row)
+
+SELECT length(query) <= 64 AS text_is_clipped
+FROM pg_track_optimizer
+WHERE query LIKE 'SELECT 1 AS x%';
+ text_is_clipped 
+-----------------
+ t
+(1 row)
+
+RESET pg_track_optimizer.max_query_size;
+-- Truncation never cuts a multibyte character in half: the stored prefix is
+-- still valid text in the database encoding.
+SELECT * FROM pg_track_optimizer_reset();
+ pg_track_optimizer_reset 
+--------------------------
+                        3
+(1 row)
+
+SET pg_track_optimizer.max_query_size = 64;
+SELECT 2 AS y /* ЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖ */;
+ y 
+---
+ 2
+(1 row)
+
+SELECT length(query) <= 64 AS bytes_within_limit,
+       length(query) >= 32 AS not_truncated_to_nothing
+FROM pg_track_optimizer
+WHERE query LIKE 'SELECT 2 AS y%';
+ bytes_within_limit | not_truncated_to_nothing 
+--------------------+--------------------------
+ t                  | t
+(1 row)
+
+RESET pg_track_optimizer.max_query_size;
+-- The charge and the release agree: resetting an entry gives back exactly
+-- what storing it took.
+SELECT * FROM pg_track_optimizer_reset();
+ pg_track_optimizer_reset 
+--------------------------
+                        3
+(1 row)
+
+SELECT mem_used AS baseline FROM pg_track_optimizer_status \gset
+SELECT 3 AS z;
+ z 
+---
+ 3
+(1 row)
+
+SELECT 4 AS z;
+ z 
+---
+ 4
+(1 row)
+
+SELECT mem_used > :baseline AS charge_grew FROM pg_track_optimizer_status;
+ charge_grew 
+-------------
+ t
+(1 row)
+
+SELECT * FROM pg_track_optimizer_reset();
+ pg_track_optimizer_reset 
+--------------------------
+                        4
+(1 row)
+
+-- Back to a single entry (the reset call itself), so the same charge as the
+-- baseline measured the same way.
+SELECT mem_used = :baseline AS charge_released FROM pg_track_optimizer_status;
+ charge_released 
+-----------------
+ t
+(1 row)
+
+SELECT * FROM pg_track_optimizer_reset();
+ pg_track_optimizer_reset 
+--------------------------
+                        2
+(1 row)
+
+DROP EXTENSION pg_track_optimizer;

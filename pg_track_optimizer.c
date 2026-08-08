@@ -27,6 +27,7 @@
 #include "executor/instrument.h"
 #include "funcapi.h"
 #include "lib/dshash.h"
+#include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "nodes/queryjumble.h"
 #include "pgstat.h"
@@ -50,7 +51,7 @@ PG_MODULE_MAGIC;
 #else
 PG_MODULE_MAGIC_EXT(
 					.name = "pg_track_optimizer",
-					.version = "0.9.3"
+					.version = "0.9.4"
 );
 #endif
 
@@ -83,6 +84,23 @@ typedef struct TODSMRegistry
 	 * should cause the HTAB to be reset, along with a descriptive error.
 	 */
 	pg_atomic_uint32	htab_counter;
+
+	/*
+	 * DSA bytes charged to the entries currently in the hash table: for every
+	 * entry, the fixed-size struct plus the query text it owns.  This - not
+	 * the entry count - is what pg_track_optimizer.hash_mem bounds, because
+	 * the query texts are variable-sized and usually dominate.
+	 *
+	 * The charge accounts for the payload the extension asks the allocator
+	 * for.  The DSA adds its own overhead on top (size-class rounding, span
+	 * and segment headers, the dshash bucket array), so the real footprint -
+	 * reported as dsa_size by pg_track_optimizer_status() - runs somewhat
+	 * above this figure.
+	 *
+	 * Same access rules as htab_counter: read without any lock, written only
+	 * by the backend that completed (or removed) the entry being accounted.
+	 */
+	pg_atomic_uint64	htab_mem;
 
 	pg_atomic_uint32	need_syncing;
 } TODSMRegistry;
@@ -231,6 +249,7 @@ static int track_mode = TRACK_MODE_DISABLED;
 static int track_effort = TRACK_EFFORT_TIMING;
 static double log_min_error = -1.0;
 static int hash_mem = 4096;
+static int max_query_size = 2048;
 static bool auto_flush = true;
 
 /* Per-plan-node instrumentation flags implied by the current effort level */
@@ -296,6 +315,7 @@ to_init_shmem(void *ptr, void *arg)
 	htab = dshash_create(htab_dsa, &dsh_params, 0);
 	state->dshh = dshash_get_hash_table_handle(htab);
 	pg_atomic_init_u32(&state->htab_counter, 0);
+	pg_atomic_init_u64(&state->htab_mem, 0);
 	pg_atomic_init_u32(&state->need_syncing, 0);
 
 	_load_hash_table_safe(state);
@@ -454,10 +474,70 @@ _explain_statement(QueryDesc *queryDesc, double normalized_error)
 			 errhidestmt(true)));
 }
 
-static uint32
-hashtable_elements_max(void)
+/* The memory budget, in bytes */
+static inline uint64
+memory_limit(void)
 {
-	return (uint32) (hash_mem * (Size) 1024 / sizeof(DSMOptimizerTrackerEntry));
+	return (uint64) hash_mem * 1024;
+}
+
+/*
+ * Bytes charged to an entry that owns a query text of 'len' bytes (not
+ * counting the terminating NUL).  Both allocations are rounded the way the
+ * allocator rounds them, so that the charge tracks the request rather than
+ * the payload.
+ */
+static inline uint64
+entry_memory_cost(Size len)
+{
+	return (uint64) MAXALIGN(sizeof(DSMOptimizerTrackerEntry)) +
+		MAXALIGN(len + 1);
+}
+
+/*
+ * Length of the query text as it will be stored: never more than
+ * max_query_size bytes, and never cut in the middle of a multibyte
+ * character.
+ *
+ * NB: clipping is done in the encoding of the current database, so this must
+ * only ever be applied to a text that belongs to it - which rules out the
+ * texts read back from the statistics file, as they come from every database
+ * of the cluster.  Those are stored as they were written.
+ */
+static inline int
+stored_query_len(const char *query)
+{
+	int		len = (int) strlen(query);
+
+	if (len > max_query_size)
+		len = pg_mbcliplen(query, len, max_query_size);
+
+	return len;
+}
+
+/*
+ * Is there room in the budget for one more entry costing 'cost' bytes?
+ *
+ * Deliberately racy, exactly like the entry counter it replaced: the check
+ * is made outside the hash table partition lock, so concurrent backends may
+ * all see room and each insert one entry.  The overshoot is bounded by the
+ * number of backends inserting at that instant times the largest entry cost
+ * (sizeof(entry) + max_query_size), which is why max_query_size matters for
+ * the guarantee and not only for the average.
+ */
+static bool
+memory_available(uint64 cost)
+{
+	/*
+	 * The counter is only capable of holding so many entries.  With the
+	 * default settings the memory budget is exhausted long before this, but
+	 * hash_mem may be set high enough to make the counter the binding
+	 * constraint.
+	 */
+	if (pg_atomic_read_u32(&shared->htab_counter) == UINT32_MAX)
+		return false;
+
+	return pg_atomic_read_u64(&shared->htab_mem) + cost <= memory_limit();
 }
 
 /*
@@ -471,38 +551,56 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	DSMOptimizerTrackerEntry   *entry;
 	DSMOptimizerTrackerKey		key;
 	bool						found;
-	uint32						counter;
+	int							qlen;
+	uint64						cost;
 
 	Assert(htab != NULL && queryDesc->plannedstmt->queryId != UINT64CONST(0));
 
 	if (!(ctx->avg_error >= log_min_error || track_mode == TRACK_MODE_FORCED))
 		return false;
 
-	/* Guard on the number of elements */
-	counter = pg_atomic_read_u32(&shared->htab_counter);
-	if (counter == UINT32_MAX || counter > hashtable_elements_max())
-	{
-		/*
-		 * Silently ignore new entries when hash table is full. Logging here
-		 * would quickly overfill log files under high transaction rates
-		 * (thousands per second). Users should monitor hash table capacity
-		 * via pg_track_optimizer_status() instead.
-		 */
-		return false;
-	}
+	qlen = stored_query_len(queryDesc->sourceText);
+	cost = entry_memory_cost(qlen);
 
 	memset(&key, 0, sizeof(DSMOptimizerTrackerKey));
 	key.dbOid = MyDatabaseId;
 	key.queryId = queryDesc->plannedstmt->queryId;
-	entry = dshash_find_or_insert(htab, &key, &found);
 
-	if (!found)
+	/*
+	 * Look the key up without inserting first.  The memory budget gates new
+	 * entries only: updating one that already exists costs nothing extra, so
+	 * an exhausted budget must not stop the statistics of the queries the
+	 * table already tracks.
+	 */
+	entry = dshash_find(htab, &key, true);
+	if (entry == NULL)
+	{
 		/*
-		 * A freshly inserted entry holds uninitialized memory, so its
-		 * query_ptr may look like anything.  Mark the entry incomplete with
-		 * the very first store, before any operation that could fail.
+		 * Cheap pre-check, so that a workload of ever-new query IDs hitting
+		 * an exhausted budget does not keep inserting and deleting entries
+		 * under the partition lock.  The authoritative check is the one in
+		 * the initialization branch below.
 		 */
-		entry->query_ptr = InvalidDsaPointer;
+		if (!memory_available(cost))
+			/*
+			 * Silently ignore new entries once the budget is spent. Logging
+			 * here would quickly overfill log files under high transaction
+			 * rates (thousands per second). Users should monitor the
+			 * remaining budget via pg_track_optimizer_status() instead.
+			 */
+			return false;
+
+		entry = dshash_find_or_insert(htab, &key, &found);
+
+		if (!found)
+			/*
+			 * A freshly inserted entry holds uninitialized memory, so its
+			 * query_ptr may look like anything.  Mark the entry incomplete
+			 * with the very first store, before any operation that could
+			 * fail.
+			 */
+			entry->query_ptr = InvalidDsaPointer;
+	}
 
 	/*
 	 * Store per-execution statistics (most recent execution only).
@@ -514,7 +612,6 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 	if (!DsaPointerIsValid(entry->query_ptr))
 	{
-		size_t		len = strlen(queryDesc->sourceText);
 		dsa_pointer	query_ptr;
 		char	   *strptr;
 
@@ -523,7 +620,18 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		 * midway: build it from scratch.  Such an entry owns nothing - the
 		 * query text is published in the same store that marks the entry
 		 * complete - so there is nothing to release first.
+		 *
+		 * Nothing has been charged for it either, so this is where the
+		 * budget decides.  An entry that cannot be paid for goes away
+		 * completely: keeping the placeholder would leave the table holding
+		 * a key that every later execution has to rebuild from scratch.
 		 */
+		if (!memory_available(cost))
+		{
+			dshash_delete_entry(htab, entry);
+			return false;
+		}
+
 		rstats_set_empty(&entry->avg_error);
 		rstats_set_empty(&entry->rms_error);
 		rstats_set_empty(&entry->twa_error);
@@ -546,10 +654,10 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		 * that readers skip and the next execution of this query rebuilds.
 		 */
 		PGTO_INJECTION_POINT("pg_track_optimizer-query-text-alloc");
-		query_ptr = dsa_allocate0(htab_dsa, len + 1);
+		query_ptr = dsa_allocate0(htab_dsa, qlen + 1);
 		Assert(DsaPointerIsValid(query_ptr));
 		strptr = (char *) dsa_get_address(htab_dsa, query_ptr);
-		strlcpy(strptr, queryDesc->sourceText, len + 1);
+		strlcpy(strptr, queryDesc->sourceText, qlen + 1);
 
 		/* This store completes the entry - keep it last */
 		PGTO_INJECTION_POINT("pg_track_optimizer-entry-publish");
@@ -558,9 +666,12 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		/*
 		 * Global accounting after the entry-local state is complete: an
 		 * incomplete leftover was never counted, so completing it (fresh or
-		 * rebuilt) counts it exactly once.
+		 * rebuilt) counts it exactly once.  Charge the same 'cost' that
+		 * memory_available() was asked about, so that the charge and the
+		 * release in reset_htab() always agree.
 		 */
 		pg_atomic_fetch_add_u32(&shared->htab_counter, 1);
+		pg_atomic_fetch_add_u64(&shared->htab_mem, cost);
 	}
 
 	/*
@@ -749,12 +860,26 @@ _PG_init(void)
 
 	DefineCustomIntVariable("pg_track_optimizer.hash_mem",
 							"Maximum size of DSM memory for the hash table",
-							NULL,
+							"Bounds the entries and the query texts together; "
+							"new queries stop being tracked once it is spent",
 							&hash_mem,
 							4096,
 							0, INT_MAX,
-							PGC_SUSET,
+							PGC_SIGHUP,
 							GUC_UNIT_KB,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("pg_track_optimizer.max_query_size",
+							"Maximum number of bytes stored per query text",
+							"Longer texts are truncated, which caps how much "
+							"of the hash_mem budget a single entry can take",
+							&max_query_size,
+							2048,
+							64, 1024 * 1024,
+							PGC_SUSET,
+							GUC_UNIT_BYTE,
 							NULL,
 							NULL,
 							NULL);
@@ -801,12 +926,13 @@ Datum
 pg_track_optimizer_status(PG_FUNCTION_ARGS)
 {
 	TupleDesc	tupdesc;
-	Datum		values[3];
-	bool		nulls[3];
+	Datum		values[6];
+	bool		nulls[6];
 	HeapTuple	tuple;
 	const char *mode_str;
-	uint32		entries_count;
-	uint32		entries_max;
+	uint32		entries;
+	uint64		mem_used;
+	uint64		limit;
 	bool		is_synced;
 
 	track_attach_shmem();
@@ -828,9 +954,14 @@ pg_track_optimizer_status(PG_FUNCTION_ARGS)
 			break;
 	}
 
-	/* Get entry counts */
-	entries_count = pg_atomic_read_u32(&shared->htab_counter);
-	entries_max = hashtable_elements_max();
+	/*
+	 * Budget accounting.  The two atomics are read separately, so a
+	 * concurrent insert may be reflected in one and not yet in the other;
+	 * this is a status report, not a consistent snapshot.
+	 */
+	entries = pg_atomic_read_u32(&shared->htab_counter);
+	mem_used = pg_atomic_read_u64(&shared->htab_mem);
+	limit = memory_limit();
 
 	/* Check sync status */
 	is_synced = (pg_atomic_read_u32(&shared->need_syncing) == 0);
@@ -841,10 +972,28 @@ pg_track_optimizer_status(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("function returning record called in context that cannot accept type record")));
 
+	/*
+	 * The shape of this function changed in 0.9.4.  Catch a library that is
+	 * newer than the installed SQL definition here, rather than letting it
+	 * report the columns of one version through the descriptor of another.
+	 */
+	if (tupdesc->natts != lengthof(values))
+		elog(ERROR, "incorrect number of output arguments");
+
 	memset(nulls, 0, sizeof(nulls));
 	values[0] = CStringGetTextDatum(mode_str);
-	values[1] = UInt32GetDatum(entries_max - entries_count);
-	values[2] = BoolGetDatum(is_synced);
+	values[1] = Int64GetDatum((int64) entries);
+	values[2] = Int64GetDatum((int64) mem_used);
+	values[3] = Int64GetDatum(mem_used < limit ? (int64) (limit - mem_used) : 0);
+
+	/*
+	 * The DSA total is the amount of shared memory the extension really
+	 * occupies: the charged payload plus the allocator's own overhead.  It
+	 * is reported next to mem_used so that the gap between the budget and
+	 * reality is visible rather than assumed.
+	 */
+	values[4] = Int64GetDatum((int64) dsa_get_total_size(htab_dsa));
+	values[5] = BoolGetDatum(is_synced);
 
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 
@@ -949,12 +1098,17 @@ reset_htab(void)
 		 */
 		if (DsaPointerIsValid(entry->query_ptr))
 		{
+			const char *str = (const char *)
+				dsa_get_address(htab_dsa, entry->query_ptr);
+			uint64		cost = entry_memory_cost(strlen(str));
+
 			Assert(entry->key.queryId != UINT64CONST(0) &&
 				   OidIsValid(entry->key.dbOid));
 
 			/* At first, free memory, allocated for the query text */
 			dsa_free(htab_dsa, entry->query_ptr);
 			pg_atomic_fetch_sub_u32(&shared->htab_counter, 1);
+			pg_atomic_fetch_sub_u64(&shared->htab_mem, cost);
 
 			/*
 			 * htab_counter may be changes simultaneously. So, calculate how
@@ -1222,6 +1376,7 @@ recreate_htab(TODSMRegistry *state)
 	state->dsah = dsa_get_handle(htab_dsa);
 	state->dshh = dshash_get_hash_table_handle(htab);
 	pg_atomic_init_u32(&state->htab_counter, 0);
+	pg_atomic_init_u64(&state->htab_mem, 0);
 	pg_atomic_init_u32(&state->need_syncing, 0);
 }
 
@@ -1259,6 +1414,7 @@ _load_hash_table(TODSMRegistry *state)
 	DSMOptimizerTrackerEntry   *entry;
 	uint32						stored_nrecs;
 	uint32						counter = 0;
+	uint64						mem = 0;
 	off_t						filepos = 0;
 	pg_crc32c					crc;
 	pg_crc32c					stored_crc;
@@ -1361,6 +1517,7 @@ _load_hash_table(TODSMRegistry *state)
 	{
 		char   *str;
 		uint32	len;
+		uint64	cost;
 		bool	found;
 
 		/* Read the entry header */
@@ -1381,18 +1538,6 @@ _load_hash_table(TODSMRegistry *state)
 			!OidIsValid(disk_entry.key.dbOid))
 			goto data_corrupted_error;
 
-		/* Check if we're exceeding hash table capacity */
-		if (counter >= (uint32) hashtable_elements_max())
-		{
-			ereport(WARNING,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("[%s] file \"%s\" contains more records than hash table may consume (%d)",
-				 EXTENSION_NAME, filename, hashtable_elements_max()),
-				 errdetail("skip data file load for safety"),
-				 errhint("remove the file manually or reset statistics in advance")));
-			goto soft_failed_end;
-		}
-
 		/* Load query string */
 		nbytes = FileRead(file, &len, sizeof(uint32), filepos,
 						  WAIT_EVENT_DATA_FILE_READ);
@@ -1403,6 +1548,25 @@ _load_hash_table(TODSMRegistry *state)
 			goto length_error;
 		COMP_CRC32C(crc, &len, sizeof(uint32));
 		filepos += nbytes;
+
+		/*
+		 * Charge the record against the budget before making room for it.
+		 * The text is stored as it was written: max_query_size is applied
+		 * when an entry is created, and re-applying it here would mean
+		 * clipping texts of other databases by this one's encoding.
+		 */
+		cost = entry_memory_cost(len);
+		if (mem + cost > memory_limit() || counter == UINT32_MAX)
+		{
+			ereport(WARNING,
+				(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+				 errmsg("[%s] file \"%s\" holds more data than \"%s\" allows ("UINT64_FORMAT" bytes)",
+				 EXTENSION_NAME, filename, "pg_track_optimizer.hash_mem",
+				 memory_limit()),
+				 errdetail("skip data file load for safety"),
+				 errhint("raise the limit, remove the file manually or reset statistics in advance")));
+			goto soft_failed_end;
+		}
 
 		/*
 		 * No-OOM allocation: an out-of-memory condition while loading an
@@ -1426,6 +1590,7 @@ _load_hash_table(TODSMRegistry *state)
 			goto read_error;
 		COMP_CRC32C(crc, str, len);
 		filepos += nbytes;
+		mem += cost;
 
 		entry = dshash_find_or_insert(htab, &disk_entry.key, &found);
 		if (found)
@@ -1522,6 +1687,7 @@ _load_hash_table(TODSMRegistry *state)
 
 	FileClose(file);
 	pg_atomic_write_u32(&state->htab_counter, counter);
+	pg_atomic_write_u64(&state->htab_mem, mem);
 	elog(LOG, "[%s] %u records loaded from file \"%s\"",
 		 EXTENSION_NAME, counter, filename);
 	return counter;

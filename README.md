@@ -124,12 +124,42 @@ SET pg_track_optimizer.log_min_error = 2.0;
 When a query exceeds this threshold in `normal` mode, its EXPLAIN ANALYZE output is written to the PostgreSQL log file.
 
 #### `pg_track_optimizer.hash_mem`
-Memory limit (in KB) for the shared memory hash table.
+Memory budget for the shared memory hash table (default `4MB`). Changing it
+requires a configuration reload — it governs a cluster-wide resource, so it
+cannot be set per session.
 
 ```sql
 -- Allow 10MB for query tracking
-SET pg_track_optimizer.hash_mem = 10240;
+ALTER SYSTEM SET pg_track_optimizer.hash_mem = '10MB';
+SELECT pg_reload_conf();
 ```
+
+The budget covers everything the hash table stores: the fixed-size entries
+*and* the query texts, which are variable-length and usually the larger
+half. Each new query is charged for both, and once the budget is spent new
+queries are silently dropped — queries already in the table keep
+accumulating statistics. `pg_track_optimizer_status` reports how much of the
+budget is in use.
+
+The charge accounts for what the extension asks the allocator for. The
+dynamic shared area adds its own overhead on top (size-class rounding,
+segment and span headers, hash bucket arrays) and never gives a segment back
+below its 1MB minimum, so the resident footprint — reported as `dsa_size` —
+sits above `mem_used` and never below 1MB, however small `hash_mem` is.
+
+#### `pg_track_optimizer.max_query_size`
+Maximum number of bytes stored per query text (default `2kB`). Longer texts
+are truncated on a character boundary, so a single machine-generated
+statement cannot claim an outsized share of `hash_mem`.
+
+```sql
+-- Keep more of each statement, at the cost of fewer tracked queries
+SET pg_track_optimizer.max_query_size = '8kB';
+```
+
+Together with `hash_mem` this bounds the table: at most
+`hash_mem / (sizeof(entry) + max_query_size)` entries in the worst case, and
+usually many more, because most statements are far shorter than the cap.
 
 #### `pg_track_optimizer.auto_flush`
 Controls automatic flushing of statistics to disk on backend shutdown.
@@ -278,20 +308,28 @@ SELECT * FROM pg_track_optimizer_status;
 
 **Example output:**
 ```
-  mode  | entries_left | is_synced
---------+--------------+-----------
- normal |         9847 | f
+  mode  | entries | mem_used | mem_free | dsa_size | is_synced
+--------+---------+----------+----------+----------+-----------
+ normal |     412 |   671744 |  3522560 |  4194304 | f
 ```
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `mode` | text | Current tracking mode: `disabled`, `normal`, or `forced` |
-| `entries_left` | integer | Remaining capacity in the hash table for new query entries |
+| `entries` | bigint | Number of queries currently tracked |
+| `mem_used` | bigint | Bytes of the `hash_mem` budget charged to those entries, query texts included |
+| `mem_free` | bigint | Bytes of the budget still available for new queries |
+| `dsa_size` | bigint | Shared memory the extension really occupies: `mem_used` plus allocator overhead |
 | `is_synced` | boolean | Whether current statistics have been flushed to disk (`true` = synced, `false` = pending changes) |
+
+There is no "entries left" figure, because it is not knowable: how many more
+queries fit depends on how long their texts turn out to be. Watch `mem_free`
+instead — once it reaches zero, new queries are silently ignored.
 
 This is useful for:
 - Verifying the extension is enabled and in the expected mode
-- Monitoring hash table capacity to avoid silent drops (when full, new queries are silently ignored)
+- Monitoring the memory budget to avoid silent drops
+- Sizing `hash_mem` against the real footprint, by comparing `dsa_size` with `mem_used`
 - Checking if statistics need to be flushed before maintenance or shutdown
 
 ## Interpreting Results
@@ -390,7 +428,9 @@ conditions and workload definitions are in
   within a few percent, `timing` and `full` cost 35-42%.
 - **`forced`**: 4-7% up to 16 concurrent clients; at 60-120 clients
   executing the same query, throughput drops by 55-62%.
-- **Memory**: Configurable via `hash_mem`, typically 1-10 MB
+- **Memory**: Configurable via `hash_mem`, typically 1-10 MB; entries and
+  query texts are charged against it together, and `max_query_size` caps what
+  one entry may take
 - **I/O**: None during operation; flush occurs on explicit call or backend shutdown (configurable via `auto_flush`)
 
 See [Choosing `mode` and `effort`](#choosing-mode-and-effort) for how these

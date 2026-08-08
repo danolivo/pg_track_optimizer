@@ -7,11 +7,12 @@ OBJS = \
 PGFILEDESC = "pg_track_optimizer - track planning decisions"
 
 EXTENSION = pg_track_optimizer
-EXTVERSION = 0.9.3
+EXTVERSION = 0.9.4
 
-DATA = pg_track_optimizer--$(EXTVERSION).sql
+DATA = pg_track_optimizer--$(EXTVERSION).sql \
+	pg_track_optimizer--0.9.3--0.9.4.sql
 
-REGRESS = interface join_filtering pg_track_optimizer rstats subplan privileges effort
+REGRESS = interface join_filtering pg_track_optimizer rstats subplan privileges effort memory
 
 TAP_TESTS = 1
 
