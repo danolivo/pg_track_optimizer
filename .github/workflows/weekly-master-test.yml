@@ -31,6 +31,7 @@ jobs:
           libssl-dev \
           libxml2-utils \
           xsltproc \
+          libipc-run-perl \
           ccache
 
     - name: Clone PostgreSQL master
@@ -47,9 +48,11 @@ jobs:
     - name: Build PostgreSQL master
       run: |
         cd ~/postgresql
-        ./configure --prefix=$HOME/postgresql/inst --enable-debug --enable-cassert --enable-depend
+        ./configure --prefix=$HOME/postgresql/inst --enable-debug --enable-cassert \
+                    --enable-depend --enable-tap-tests --enable-injection-points
         make -j$(nproc)
         make install
+        make -C src/test/modules/injection_points install
 
     - name: Add PostgreSQL to PATH
       run: |
@@ -66,17 +69,23 @@ jobs:
       id: make-check
       continue-on-error: true
       run: |
-        export PATH="$HOME/postgresql/inst/bin:$PATH"
-        make USE_PGXS=1 check
+        set -euo pipefail
+        # In-tree, not USE_PGXS=1: the PGXS "check" target only prints an
+        # advisory and exits 0, so running it here would report success without
+        # executing a single test.  In-tree check also runs the TAP suite.
+        rsync -a --delete --exclude '.git' \
+              "$GITHUB_WORKSPACE/" ~/postgresql/contrib/pg_track_optimizer/
+        make -C ~/postgresql/contrib/pg_track_optimizer check
 
     - name: Show regression diffs on make check failure
       if: steps.make-check.outcome == 'failure'
       run: |
         echo "::error::make check failed"
-        if [ -f regression.diffs ]; then
-          echo "=== Regression diffs from make check ==="
-          cat regression.diffs
-        fi
+        cd ~/postgresql/contrib/pg_track_optimizer
+        for f in regression.diffs regression.out; do
+          [ -f "$f" ] && { echo "=== $f ==="; cat "$f"; }
+        done
+        find tmp_check/log -type f -print -exec cat {} \; 2>/dev/null | head -500
 
     - name: Install extension for installcheck
       run: |
