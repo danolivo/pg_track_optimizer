@@ -163,6 +163,40 @@ SELECT pg_reload_conf();
 
 This parameter can only be changed by superusers. When enabled, statistics are automatically persisted to disk when backends shut down, ensuring data is not lost on normal server restarts. Disabling this may be useful in high-throughput environments where the flush overhead is undesirable.
 
+#### `pg_track_optimizer.queryid_mask_temp_names`
+Gives every temporary relation the same identity in the query id, so that
+statements differing only in the name of a temporary table share one entry.
+
+- **`off`** (default): the server's own query id is used unchanged
+- **`on`**: the fingerprint is recomputed with temporary relations collapsed
+
+```sql
+-- Superuser only; takes effect for statements parsed afterwards
+SET pg_track_optimizer.queryid_mask_temp_names = on;
+SELECT pg_track_optimizer_reset();
+```
+
+Applications that generate SQL mechanically name their temporary tables after
+a per-session counter, so one logical statement reaches the server as
+`tt165` in one session and as `tt1551` in the next. Without this setting each
+name becomes its own entry, the shape of the workload disappears under
+thousands of single-call rows, and the `hash_mem` budget is spent on keys that
+will never be seen again. On a three-hour 1C run, 12 297 of 17 586 tracked
+statements referenced a distinct `pg_temp.tt<N>` and 12 492 had exactly one
+execution.
+
+What still tells statements apart is the rest of the parse tree — target list,
+column numbers, join structure, quals — so a different query over a temporary
+table remains a different entry. What it deliberately merges is two unrelated
+temporary tables of the same shape queried the same way; that is why it is off
+by default.
+
+Two caveats. Entries recorded before the setting changed keep their old key, so
+reset the statistics after toggling it. And for other consumers of the query id
+— `pg_stat_statements` in particular — to observe the collapsed value, this
+module must appear in `shared_preload_libraries` *after* them, because hooks
+run in the reverse of the order they were installed.
+
 ### Choosing `mode` and `effort`
 
 `log_min_error` decides which queries are stored and logged; it does not

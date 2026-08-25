@@ -43,6 +43,7 @@
 #include "utils/wait_event.h"
 
 #include "plan_error.h"
+#include "queryid_mask.h"
 #include "rstats.h"
 
 #if (PG_VERSION_NUM < 180000)
@@ -881,6 +882,13 @@ _PG_init(void)
 							 NULL,
 							 NULL,
 							 NULL);
+
+	/*
+	 * Defines pg_track_optimizer.queryid_mask_temp_names and installs its hook.
+	 * Must precede MarkGUCPrefixReserved() below, which closes the prefix to
+	 * further definitions.
+	 */
+	queryid_mask_init();
 
 	MarkGUCPrefixReserved("pg_track_optimizer");
 
