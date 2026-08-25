@@ -3,7 +3,7 @@
 MODULE_big = pg_track_optimizer
 OBJS = \
 	$(WIN32RES) \
-	pg_track_optimizer.o plan_error.o rstats.o
+	pg_track_optimizer.o plan_error.o queryid_mask.o rstats.o
 PGFILEDESC = "pg_track_optimizer - track planning decisions"
 
 EXTENSION = pg_track_optimizer
@@ -11,7 +11,8 @@ EXTVERSION = 0.9.3
 
 DATA = pg_track_optimizer--$(EXTVERSION).sql
 
-REGRESS = interface join_filtering pg_track_optimizer rstats subplan privileges effort
+REGRESS = interface join_filtering pg_track_optimizer rstats subplan privileges effort \
+	queryid_mask
 
 TAP_TESTS = 1
 
