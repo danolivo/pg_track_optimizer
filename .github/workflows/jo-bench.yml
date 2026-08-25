@@ -87,16 +87,25 @@ jobs:
 
     - name: Setup jo-bench repository
       run: |
+        set -euo pipefail
         cd ~
-        if [ -d "jo-bench" ]; then
-          echo "jo-bench directory exists, updating..."
-          cd jo-bench
-          git fetch origin main || true
-          git reset --hard origin/main || true
-        else
-          echo "Cloning jo-bench repository..."
-          git clone --depth 1 https://github.com/danolivo/jo-bench.git
+        # A cached checkout that cannot be refreshed must not be used as if it
+        # were current: the wiki page records the jo-bench commit, so silently
+        # benchmarking an older one would misreport the result.  Re-clone
+        # instead, and print the commit actually in use.
+        if [ -d jo-bench/.git ]; then
+          echo "jo-bench found in cache, refreshing..."
+          if ! ( cd jo-bench && git fetch --depth 1 origin main &&
+                 git reset --hard FETCH_HEAD ); then
+            echo "refresh failed, discarding the cached copy"
+            rm -rf jo-bench
+          fi
         fi
+        if [ ! -d jo-bench/.git ]; then
+          echo "Cloning jo-bench repository..."
+          git clone --depth 1 https://github.com/danolivo/jo-bench.git jo-bench
+        fi
+        git -C jo-bench log -1 --format='jo-bench at %h %ad %s' --date=short
 
     - name: Initialize PostgreSQL cluster
       run: |
@@ -166,19 +175,10 @@ jobs:
 
     - name: Execute jo-bench queries (Pass 1 - without extra indexes)
       run: |
+        set -euo pipefail
         export PATH="$HOME/postgresql/inst/bin:$PATH"
-        cd ~/jo-bench/queries
-        echo "Executing queries (Pass 1 - without extra indexes)..."
-        for query_file in *.sql; do
-          if [ -f "$query_file" ]; then
-            echo "Running: $query_file"
-            # Add filename comment before query and execute
-            (echo "/* $query_file */"; cat "$query_file") | \
-              psql -d jobench -v datadir="'$HOME/jo-bench'" > /dev/null 2>&1 || \
-              echo "Query $query_file failed"
-          fi
-        done
-        echo "All queries executed (Pass 1)."
+        chmod +x .github/scripts/run-jobench-queries.sh
+        .github/scripts/run-jobench-queries.sh ~/jo-bench/queries 1
 
     - name: Export pg_track_optimizer results to CSV (Pass 1)
       run: |
@@ -236,19 +236,9 @@ jobs:
 
     - name: Execute jo-bench queries (Pass 2 - with extra indexes)
       run: |
+        set -euo pipefail
         export PATH="$HOME/postgresql/inst/bin:$PATH"
-        cd ~/jo-bench/queries
-        echo "Executing queries (Pass 2 - with extra indexes)..."
-        for query_file in *.sql; do
-          if [ -f "$query_file" ]; then
-            echo "Running: $query_file"
-            # Add filename comment before query and execute
-            (echo "/* $query_file */"; cat "$query_file") | \
-              psql -d jobench -v datadir="'$HOME/jo-bench'" > /dev/null 2>&1 || \
-              echo "Query $query_file failed"
-          fi
-        done
-        echo "All queries executed (Pass 2)."
+        .github/scripts/run-jobench-queries.sh ~/jo-bench/queries 2
 
     - name: Export pg_track_optimizer results to CSV (Pass 2)
       run: |
@@ -329,20 +319,27 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.WIKI_TOKEN }}
       run: |
+        set -euo pipefail
         export PATH="$HOME/postgresql/inst/bin:$PATH"
+
+        # No token is a legitimate skip - a run from a fork never gets the
+        # secret.  A clone or a generator that fails while the token IS present
+        # is a defect, and used to exit 0 just the same, so a broken wiki script
+        # could go unnoticed for weeks.
+        if [ -z "${GH_TOKEN:-}" ]; then
+          echo "::notice::WIKI_TOKEN unavailable, skipping the wiki update"
+          exit 0
+        fi
 
         # Save paths and commits before changing directories
         SCRIPT_PATH="$(pwd)/.github/scripts/generate-wiki-page.sh"
         EXT_COMMIT=$(git rev-parse HEAD)
-        BENCH_COMMIT=$(cd ~/jo-bench && git rev-parse HEAD)
+        BENCH_COMMIT=$(git -C ~/jo-bench rev-parse HEAD)
         chmod +x "$SCRIPT_PATH"
 
         # Clone wiki repository with authentication
         cd ~
-        git clone https://x-access-token:${GH_TOKEN}@github.com/danolivo/pg_track_optimizer.wiki.git wiki || {
-          echo "Failed to clone wiki repository. Skipping wiki update."
-          exit 0
-        }
+        git clone "https://x-access-token:${GH_TOKEN}@github.com/danolivo/pg_track_optimizer.wiki.git" wiki
 
         # Run wiki page generation script with both Pass 1 and Pass 2 results
         "$SCRIPT_PATH" \
@@ -353,10 +350,7 @@ jobs:
           "$BENCH_COMMIT" \
           /tmp/pg_track_optimizer_results_pass1.csv \
           /tmp/pg_track_optimizer_results_pass2.csv \
-          ~/pgdata/logfile.log || {
-          echo "Failed to generate wiki page."
-          exit 0
-        }
+          ~/pgdata/logfile.log
 
     - name: Stop PostgreSQL
       if: always()
@@ -364,19 +358,27 @@ jobs:
         export PATH="$HOME/postgresql/inst/bin:$PATH"
         pg_ctl -D $HOME/pgdata stop || true
 
+    # always(), so that a run stopped by a failing query still hands over
+    # whatever it managed to collect.  The wiki, by contrast, is deliberately
+    # not updated in that case: publishing numbers from a partial run is worse
+    # than publishing nothing.
     - name: Upload Pass 1 results CSV (without extra indexes)
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: pg_track_optimizer_jobench_results_pass1
         path: /tmp/pg_track_optimizer_results_pass1.csv
         retention-days: 7
+        if-no-files-found: ignore
 
     - name: Upload Pass 2 results CSV (with extra indexes)
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: pg_track_optimizer_jobench_results_pass2
         path: /tmp/pg_track_optimizer_results_pass2.csv
         retention-days: 7
+        if-no-files-found: ignore
 
     - name: Upload PostgreSQL log
       if: always()
