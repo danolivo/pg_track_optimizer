@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg_version: [17, 18]
+        pg_version: [17, 18, 19]
 
     steps:
     - name: Checkout extension code
@@ -34,43 +34,70 @@ jobs:
           libssl-dev \
           libxml2-utils \
           xsltproc \
+          libipc-run-perl \
           ccache
 
-    - name: Get PostgreSQL branch HEAD SHA
-      id: pg-sha
+    - name: Resolve PostgreSQL ref
+      id: pgref
       run: |
-        if [ "${{ matrix.pg_version }}" = "master" ]; then
-          BRANCH="master"
+        set -euo pipefail
+        V='${{ matrix.pg_version }}'
+        REPO=https://github.com/postgres/postgres.git
+
+        if [ "$V" = "master" ]; then
+          REF=master
         else
-          BRANCH="REL_${{ matrix.pg_version }}_STABLE"
+          REF="REL_${V}_STABLE"
+          if [ -z "$(git ls-remote --heads "$REPO" "refs/heads/$REF")" ]; then
+            # A release still under development has no stable branch: it is cut
+            # only around release-candidate time.  Until then the newest beta or
+            # rc tag is the closest thing to that branch's tip.
+            REF=$(git ls-remote --tags --refs "$REPO" \
+                      "refs/tags/REL_${V}_BETA*" "refs/tags/REL_${V}_RC*" \
+                  | sed 's,.*refs/tags/,,' | sort -V | tail -1)
+            if [ -z "$REF" ]; then
+              echo "PostgreSQL $V has neither a stable branch nor a beta/rc tag" >&2
+              exit 1
+            fi
+          fi
         fi
-        SHA=$(git ls-remote https://github.com/postgres/postgres.git refs/heads/$BRANCH | cut -f1)
-        echo "sha=$SHA" >> $GITHUB_OUTPUT
+
+        SHA=$(git ls-remote "$REPO" "$REF" | cut -f1)
+        if [ -z "$SHA" ]; then
+          echo "cannot resolve $REF in $REPO" >&2
+          exit 1
+        fi
+
+        echo "ref=$REF" >> "$GITHUB_OUTPUT"
+        echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+        echo "PostgreSQL $V -> $REF ($SHA)"
 
     - name: Cache PostgreSQL build
       uses: actions/cache@v4
       id: pg-cache
       with:
         path: ~/postgresql
-        key: ${{ runner.os }}-pg-${{ matrix.pg_version }}-${{ steps.pg-sha.outputs.sha }}
+        key: ${{ runner.os }}-pg-${{ matrix.pg_version }}-${{ steps.pgref.outputs.sha }}
 
     - name: Clone PostgreSQL
       if: steps.pg-cache.outputs.cache-hit != 'true'
       run: |
-        cd ~
-        if [ "${{ matrix.pg_version }}" = "master" ]; then
-          git clone --depth 1 --branch master https://github.com/postgres/postgres.git postgresql
-        else
-          git clone --depth 1 --branch REL_${{ matrix.pg_version }}_STABLE https://github.com/postgres/postgres.git postgresql
-        fi
+        set -euo pipefail
+        git clone --depth 1 --branch '${{ steps.pgref.outputs.ref }}' \
+            https://github.com/postgres/postgres.git ~/postgresql
 
     - name: Build PostgreSQL
       if: steps.pg-cache.outputs.cache-hit != 'true'
       run: |
+        set -euo pipefail
         cd ~/postgresql
-        ./configure --prefix=$HOME/postgresql/inst --enable-debug --enable-cassert --enable-depend
+        ./configure --prefix=$HOME/postgresql/inst --enable-debug --enable-cassert \
+                    --enable-depend --enable-tap-tests --enable-injection-points
         make -j$(nproc)
         make install
+        # 004_torn_entry_injection.pl needs the injection_points extension, which
+        # the top-level install target does not cover.
+        make -C src/test/modules/injection_points install
 
     - name: Add PostgreSQL to PATH
       run: |
