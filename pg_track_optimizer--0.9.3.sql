@@ -70,15 +70,30 @@ AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
 
 -- Cast to rstats
+--
+-- ASSIGNMENT, not IMPLICIT: an IMPLICIT cast is a candidate during ordinary
+-- operator/function overload resolution, not just in assignment contexts.
+-- With these casts IMPLICIT, `numeric + integer` became ambiguous database-
+-- wide: the resolver found two equally-reachable candidates -
+-- numeric_add(numeric,numeric) via the built-in integer->numeric cast, and
+-- +(rstats,integer) via a numeric->rstats cast minted by this extension -
+-- and refused to pick one ("operator is not unique: numeric + integer").
+-- That broke a real 1C business transaction (month-end cost allocation) on
+-- the load-test stand once pg_track_optimizer was installed into `public`.
+-- ASSIGNMENT still allows `INSERT`/`UPDATE` into an rstats column and
+-- function-return coercion; it is simply excluded from expression-level
+-- operator resolution, which is all that is needed here - every place this
+-- extension or its tests convert a plain number to rstats already uses an
+-- explicit `::rstats` cast.
 CREATE CAST (double precision AS rstats)
 WITH FUNCTION rstats_init_double(double precision)
-AS IMPLICIT;
+AS ASSIGNMENT;
 CREATE CAST (integer AS rstats)
 WITH FUNCTION rstats_init_int4(integer)
-AS IMPLICIT;
+AS ASSIGNMENT;
 CREATE CAST (numeric AS rstats)
 WITH FUNCTION rstats_init_numeric(numeric)
-AS IMPLICIT;
+AS ASSIGNMENT;
 
 -- Binary serialization casts
 -- Cast rstats to bytea uses rstats_send directly
