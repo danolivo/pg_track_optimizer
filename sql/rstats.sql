@@ -363,6 +363,15 @@ WHERE (o.oprleft = 'rstats'::regtype OR o.oprright = 'rstats'::regtype)
   AND o.oprname = '+'
 ORDER BY 2, 3;
 
+-- The numeric/integer/double precision -> rstats casts are ASSIGNMENT, not
+-- IMPLICIT: an IMPLICIT cast is a candidate during ordinary operator
+-- resolution, not just in assignment contexts. Made IMPLICIT once, they put
+-- +(rstats,integer) up against numeric_add(numeric,numeric) as an equally
+-- reachable candidate for plain `numeric + integer` - arithmetic that has
+-- nothing to do with rstats - and PostgreSQL refused to pick one. This must
+-- keep resolving cleanly with no rstats value or cast anywhere in sight.
+SELECT 1::numeric + 2::integer;
+
 -- Reversed-argument addition is simply undefined
 SELECT 1.0::float8 + rstats(2.0);
 
