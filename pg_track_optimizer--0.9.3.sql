@@ -78,8 +78,9 @@ LANGUAGE C IMMUTABLE STRICT;
 -- numeric_add(numeric,numeric) via the built-in integer->numeric cast, and
 -- +(rstats,integer) via a numeric->rstats cast minted by this extension -
 -- and refused to pick one ("operator is not unique: numeric + integer").
--- That broke a real 1C business transaction (month-end cost allocation) on
--- the load-test stand once pg_track_optimizer was installed into `public`.
+-- That broke a real application transaction (a month-end cost-allocation
+-- query, unrelated to this extension) once pg_track_optimizer was installed
+-- into `public`.
 -- ASSIGNMENT still allows `INSERT`/`UPDATE` into an rstats column and
 -- function-return coercion; it is simply excluded from expression-level
 -- operator resolution, which is all that is needed here - every place this
@@ -364,7 +365,17 @@ COMMENT ON VIEW pg_track_optimizer_status IS
  * both SELECT on the view and EXECUTE on the pg_track_optimizer() function:
  * function permissions inside a view are checked as the calling user.
  *
+ * USAGE on the schema itself is a separate matter from the per-object grants
+ * below: without it, an unqualified reference to any object here - even one
+ * a role has been explicitly granted - resolves as "does not exist" rather
+ * than "permission denied", because name lookup skips schemas the caller
+ * cannot see into.  A freshly created schema grants USAGE to nobody but its
+ * owner, unlike the "public" schema this extension used to default to, so
+ * grant it back explicitly; it exposes no data by itself.
+ *
  * ****************************************************************************/
+
+GRANT USAGE ON SCHEMA @extschema@ TO PUBLIC;
 
 REVOKE ALL ON FUNCTION pg_track_optimizer() FROM PUBLIC;
 REVOKE ALL ON pg_track_optimizer FROM PUBLIC;

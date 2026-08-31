@@ -18,6 +18,7 @@ shared_preload_libraries = 'pg_track_optimizer'
 pg_track_optimizer.mode = 'forced'
 pg_track_optimizer.hash_mem = 8kB
 compute_query_id = on
+search_path = 'pgto, "\$user", public'
 ));
 
 $node->start;

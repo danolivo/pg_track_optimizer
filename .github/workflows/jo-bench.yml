@@ -114,11 +114,16 @@ jobs:
 
     - name: Configure PostgreSQL with pg_track_optimizer
       run: |
+        # This cluster exists only for this job, so a cluster-wide search_path
+        # is fine here; do not copy this pattern onto a shared instance, where
+        # it would apply to every database regardless of whether it has this
+        # extension installed.
         cat >> $HOME/pgdata/postgresql.conf <<EOF
         shared_preload_libraries = 'pg_track_optimizer'
         pg_track_optimizer.mode = 'forced'
         pg_track_optimizer.log_min_error = 0.0 # print all plan states
         compute_query_id = on
+        search_path = 'pgto, "\$user", public'
         max_worker_processes = 8
         max_parallel_workers = 8
         max_parallel_workers_per_gather = 4

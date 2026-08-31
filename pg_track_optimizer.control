@@ -1,5 +1,20 @@
 # pg_track_optimizer extension
 comment = 'Track planning decisions in comparison with execution reality'
 module_pathname = '$libdir/pg_track_optimizer'
-relocatable = true
+# All the extension's objects live in their own schema rather than wherever
+# CREATE EXTENSION happens to be pointed - the query texts and error
+# statistics this extension tracks are sensitive, and a fixed, dedicated
+# schema is what makes REVOKE/GRANT on it (see the SQL script) predictable
+# regardless of the caller's search_path.  Forcing the schema this way is
+# only possible for a non-relocatable extension: PostgreSQL creates it
+# automatically on CREATE EXTENSION if it does not already exist, and the
+# SCHEMA clause is rejected unless it names this same schema.
+#
+# Named "pgto", not "pg_track_optimizer": PostgreSQL reserves the "pg_"
+# prefix for system schemas and refuses "CREATE SCHEMA pg_track_optimizer"
+# outright ("unacceptable schema name ... reserved for system schemas").
+# "pgto" already is this project's short form elsewhere (the injection
+# point names, the regress_pgto_user test role).
+relocatable = false
+schema = 'pgto'
 default_version = '0.9.3'
