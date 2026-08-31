@@ -12,7 +12,7 @@ EXTVERSION = 0.9.3
 DATA = pg_track_optimizer--$(EXTVERSION).sql
 
 REGRESS = interface join_filtering pg_track_optimizer rstats subplan privileges effort \
-	queryid_mask
+	queryid_mask dropdb_cleanup
 
 TAP_TESTS = 1
 
