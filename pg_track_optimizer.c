@@ -18,6 +18,7 @@
 
 #include "access/htup_details.h"
 #include "access/parallel.h"
+#include "commands/dbcommands.h"
 #include "commands/explain.h"
 #if PG_VERSION_NUM >= 180000
 #include "commands/explain_format.h"
@@ -35,6 +36,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
+#include "tcop/utility.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/injection_point.h"
@@ -180,6 +182,13 @@ static dshash_table *htab = NULL;
 
 static ExecutorStart_hook_type prev_ExecutorStart = NULL;
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
+static ProcessUtility_hook_type prev_ProcessUtility = NULL;
+
+static void track_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
+								  bool readOnlyTree,
+								  ProcessUtilityContext context, ParamListInfo params,
+								  QueryEnvironment *queryEnv, DestReceiver *dest,
+								  QueryCompletion *qc);
 
 /*
  * The module's work modes:
@@ -896,6 +905,8 @@ _PG_init(void)
 	ExecutorStart_hook = explain_ExecutorStart;
 	prev_ExecutorEnd = ExecutorEnd_hook;
 	ExecutorEnd_hook = track_ExecutorEnd;
+	prev_ProcessUtility = ProcessUtility_hook;
+	ProcessUtility_hook = track_ProcessUtility;
 
 	/*
 	 * NB: the on-exit flush callback is registered per backend in
@@ -1063,28 +1074,38 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 }
 
 /*
- * Reset the state of this extension to default. This will clean up all additionally
- * allocated resources and reset static and global state variables.
+ * Remove every hash table entry belonging to dbOid, releasing the DSA memory
+ * charged for each one's query text, and return how many were removed.
  *
- * Scoped to the calling backend's database, on purpose: the hash table is
- * shared cluster-wide (a single dbOid,queryId keyspace across every
- * database), but everything a caller can otherwise see or delegate is
- * scoped to current_database() - the pg_track_optimizer view filters on it,
- * and the install script's GRANT model (see sql/privileges.sql) assumes a
- * role given EXECUTE on this function in one database cannot touch another
- * database's data. An unqualified sweep over the whole table would silently
- * discard tracked statistics belonging to every other database in the
- * cluster, including ones the caller has no access to. This does not apply
- * to pg_track_optimizer_status(): its entries/mem_used/dsa_size figures are
- * deliberately cluster-wide, because hash_mem is one cluster-wide memory
- * budget shared by every database - do not "fix" that to match.
+ * Scoped to a single database, on purpose: the hash table is shared
+ * cluster-wide (a single dbOid,queryId keyspace across every database), but
+ * everything else a caller can see or delegate is scoped to
+ * current_database() - the pg_track_optimizer view filters on it, and the
+ * install script's GRANT model (see sql/privileges.sql) assumes a role
+ * given EXECUTE on pg_track_optimizer_reset() in one database cannot touch
+ * another database's data. An unqualified sweep over the whole table would
+ * silently discard tracked statistics belonging to every other database in
+ * the cluster, including ones the caller has no access to. This does not
+ * apply to pg_track_optimizer_status(): its entries/mem_used/dsa_size
+ * figures are deliberately cluster-wide, because hash_mem is one
+ * cluster-wide memory budget shared by every database - do not "fix" that
+ * to match.
+ *
+ * Two callers: reset_htab() (dbOid == MyDatabaseId, driven by a user
+ * calling pg_track_optimizer_reset()) and track_ProcessUtility() (dbOid ==
+ * a database that DROP DATABASE just removed, so its entries can never be
+ * reached through current_database() again and would otherwise linger
+ * forever - or worse, resurface as if they belonged to some future database
+ * that happens to reuse the same OID).
  */
 static uint32
-reset_htab(void)
+purge_by_dbid(Oid dbOid)
 {
 	dshash_seq_status			stat;
 	DSMOptimizerTrackerEntry   *entry;
 	uint32						counter = 0;
+
+	Assert(OidIsValid(dbOid));
 
 	track_attach_shmem();
 
@@ -1099,7 +1120,7 @@ reset_htab(void)
 		CHECK_FOR_INTERRUPTS();
 
 		/* Leave every other database's entries untouched. */
-		if (entry->key.dbOid != MyDatabaseId)
+		if (entry->key.dbOid != dbOid)
 			continue;
 
 		/*
@@ -1113,8 +1134,7 @@ reset_htab(void)
 			/* Release exactly what store_data() charged for this entry */
 			uint64		cost = entry_memory_cost(strlen(str));
 
-			Assert(entry->key.queryId != UINT64CONST(0) &&
-				   OidIsValid(entry->key.dbOid));
+			Assert(entry->key.queryId != UINT64CONST(0));
 
 			/* At first, free memory, allocated for the query text */
 			dsa_free(htab_dsa, entry->query_ptr);
@@ -1132,7 +1152,7 @@ reset_htab(void)
 	dshash_seq_term(&stat);
 
 	if (counter == 0)
-		PG_RETURN_UINT32(0);
+		return 0;
 
 	/*
 	 * Flush final state of the HTAB to the disk. There are some records might
@@ -1160,6 +1180,17 @@ reset_htab(void)
 }
 
 /*
+ * Reset the state of this extension to default for the calling database.
+ * Thin wrapper kept as the named entry point for to_reset(); see
+ * purge_by_dbid() for why this is scoped rather than cluster-wide.
+ */
+static uint32
+reset_htab(void)
+{
+	return purge_by_dbid(MyDatabaseId);
+}
+
+/*
  * No hardcoded superuser check here: EXECUTE is revoked from PUBLIC in the
  * install script, and the DBA may delegate the privilege with GRANT.
  */
@@ -1167,6 +1198,68 @@ Datum
 to_reset(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_UINT32(reset_htab());
+}
+
+/*
+ * track_ProcessUtility
+ *		Notice a successful DROP DATABASE and purge this extension's tracked
+ *		entries for it.
+ *
+ *		PostgreSQL's core cumulative-stats subsystem cleans up after DROP
+ *		DATABASE via a hardcoded call to pgstat_drop_database() inside
+ *		dropdb() itself - there is no generic extension point for it. (Unlike
+ *		ordinary catalog objects, whose removal fires object_access_hook,
+ *		databases do not go through that path.) ProcessUtility_hook is the
+ *		standard place extensions intercept utility commands they have no
+ *		other way to observe.
+ *
+ *		The target must be resolved to an OID *before* calling down: once
+ *		dropdb() has committed, the pg_database row - and any syscache
+ *		lookup for it - is gone. There is a narrow race between this lookup
+ *		and dropdb()'s own internal one (e.g. a concurrent rename of the
+ *		same OID to a different name), but the consequence of losing it is
+ *		only a missed or misdirected best-effort purge, never a correctness
+ *		or safety issue - the same stale-entry exposure this hook exists to
+ *		shrink, not a new one.
+ */
+static void
+track_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
+					  bool readOnlyTree,
+					  ProcessUtilityContext context, ParamListInfo params,
+					  QueryEnvironment *queryEnv, DestReceiver *dest,
+					  QueryCompletion *qc)
+{
+	Node   *parsetree = pstmt->utilityStmt;
+	Oid		dropped_dboid = InvalidOid;
+
+	if (IsA(parsetree, DropdbStmt))
+	{
+		DropdbStmt *stmt = (DropdbStmt *) parsetree;
+
+		/*
+		 * missing_ok: if the name doesn't resolve, the call below either
+		 * raises an error (missing_ok = false, so we never reach the purge)
+		 * or silently no-ops (missing_ok = true, in which case InvalidOid
+		 * correctly means "nothing to purge").
+		 */
+		dropped_dboid = get_database_oid(stmt->dbname, true);
+	}
+
+	if (prev_ProcessUtility)
+		prev_ProcessUtility(pstmt, queryString, readOnlyTree, context,
+							 params, queryEnv, dest, qc);
+	else
+		standard_ProcessUtility(pstmt, queryString, readOnlyTree, context,
+								params, queryEnv, dest, qc);
+
+	/*
+	 * Reaching this point means the call above returned instead of throwing,
+	 * i.e. the drop actually succeeded - ereport(ERROR) inside it would have
+	 * unwound past this function entirely, so purge_by_dbid() below never
+	 * runs for a failed or rolled-back drop.
+	 */
+	if (OidIsValid(dropped_dboid))
+		purge_by_dbid(dropped_dboid);
 }
 
 /* -----------------------------------------------------------------------------
