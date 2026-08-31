@@ -1065,6 +1065,19 @@ pg_track_optimizer(PG_FUNCTION_ARGS)
 /*
  * Reset the state of this extension to default. This will clean up all additionally
  * allocated resources and reset static and global state variables.
+ *
+ * Scoped to the calling backend's database, on purpose: the hash table is
+ * shared cluster-wide (a single dbOid,queryId keyspace across every
+ * database), but everything a caller can otherwise see or delegate is
+ * scoped to current_database() - the pg_track_optimizer view filters on it,
+ * and the install script's GRANT model (see sql/privileges.sql) assumes a
+ * role given EXECUTE on this function in one database cannot touch another
+ * database's data. An unqualified sweep over the whole table would silently
+ * discard tracked statistics belonging to every other database in the
+ * cluster, including ones the caller has no access to. This does not apply
+ * to pg_track_optimizer_status(): its entries/mem_used/dsa_size figures are
+ * deliberately cluster-wide, because hash_mem is one cluster-wide memory
+ * budget shared by every database - do not "fix" that to match.
  */
 static uint32
 reset_htab(void)
@@ -1084,6 +1097,10 @@ reset_htab(void)
 	while ((entry = dshash_seq_next(&stat)) != NULL)
 	{
 		CHECK_FOR_INTERRUPTS();
+
+		/* Leave every other database's entries untouched. */
+		if (entry->key.dbOid != MyDatabaseId)
+			continue;
 
 		/*
 		 * An entry whose initialization did not complete owns no query text
