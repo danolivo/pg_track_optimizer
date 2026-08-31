@@ -74,6 +74,23 @@ Restart PostgreSQL, then in your database:
 CREATE EXTENSION pg_track_optimizer;
 ```
 
+All of the extension's objects - the `rstats` type, its operators, the
+`pg_track_optimizer` and `pg_track_optimizer_status` views, and the
+management functions - are created in a dedicated `pgto` schema rather than
+wherever `CREATE EXTENSION` happens to be pointed. (Not `pg_track_optimizer`
+itself: PostgreSQL reserves the `pg_` prefix for its own system schemas and
+refuses to create one under that name.) PostgreSQL creates the `pgto` schema
+automatically the first time the extension is installed, and the schema is
+fixed: `CREATE EXTENSION pg_track_optimizer SCHEMA other_name` is rejected.
+Add the schema to `search_path` to reach the views and functions unqualified:
+
+```sql
+ALTER DATABASE mydb SET search_path = "$user", public, pgto;
+```
+
+or qualify individual references, e.g. `SELECT * FROM
+pgto.pg_track_optimizer_status;`.
+
 ## Configuration
 
 ### GUC Parameters
@@ -181,9 +198,9 @@ a per-session counter, so one logical statement reaches the server as
 `tt165` in one session and as `tt1551` in the next. Without this setting each
 name becomes its own entry, the shape of the workload disappears under
 thousands of single-call rows, and the `hash_mem` budget is spent on keys that
-will never be seen again. On a three-hour 1C run, 12 297 of 17 586 tracked
-statements referenced a distinct `pg_temp.tt<N>` and 12 492 had exactly one
-execution.
+will never be seen again. On a three-hour run against such a workload, 12 297
+of 17 586 tracked statements referenced a distinct `pg_temp.tt<N>` and 12 492
+had exactly one execution.
 
 What still tells statements apart is the rest of the parse tree — target list,
 column numbers, join structure, quals — so a different query over a temporary

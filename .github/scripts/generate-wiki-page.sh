@@ -57,7 +57,7 @@ SCHEMA_SQL1=$(psql -d jobench -t -A -c "
       ordinal_position,
       LAST_VALUE(column_name) OVER (ORDER BY ordinal_position ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_col
     FROM information_schema.columns
-    WHERE table_schema = 'public'
+    WHERE table_schema = 'pgto'
       AND table_name = 'pg_track_optimizer'
   ) cols;
 ")
@@ -80,7 +80,7 @@ SCHEMA_SQL2=$(psql -d jobench -t -A -c "
       ordinal_position,
       LAST_VALUE(column_name) OVER (ORDER BY ordinal_position ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) as last_col
     FROM information_schema.columns
-    WHERE table_schema = 'public'
+    WHERE table_schema = 'pgto'
       AND table_name = 'pg_track_optimizer'
   ) cols;
 ")

@@ -17,5 +17,10 @@ FROM pg_track_optimizer_status;
 \df pg_track_optimizer_reset
 \d pg_track_optimizer_status
 
+-- The schema is forced by the control file: neither an already-installed
+-- extension nor a fresh install may relocate it elsewhere.
+ALTER EXTENSION pg_track_optimizer SET SCHEMA public;
+
 SELECT * FROM pg_track_optimizer_reset();
 DROP EXTENSION pg_track_optimizer;
+CREATE EXTENSION pg_track_optimizer SCHEMA public;

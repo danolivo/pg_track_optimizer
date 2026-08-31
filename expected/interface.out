@@ -21,7 +21,7 @@ FROM pg_track_optimizer_status;
 (1 row)
 
 \d pg_track_optimizer
-                  View "public.pg_track_optimizer"
+                   View "pgto.pg_track_optimizer"
      Column      |       Type       | Collation | Nullable | Default 
 -----------------+------------------+-----------+----------+---------
  queryid         | bigint           |           |          | 
@@ -89,18 +89,18 @@ FROM pg_track_optimizer_status;
                                  List of functions
  Schema |           Name           | Result data type | Argument data types | Type 
 --------+--------------------------+------------------+---------------------+------
- public | pg_track_optimizer_flush | integer          |                     | func
+ pgto   | pg_track_optimizer_flush | integer          |                     | func
 (1 row)
 
 \df pg_track_optimizer_reset
                                  List of functions
  Schema |           Name           | Result data type | Argument data types | Type 
 --------+--------------------------+------------------+---------------------+------
- public | pg_track_optimizer_reset | integer          |                     | func
+ pgto   | pg_track_optimizer_reset | integer          |                     | func
 (1 row)
 
 \d pg_track_optimizer_status
-       View "public.pg_track_optimizer_status"
+        View "pgto.pg_track_optimizer_status"
   Column   |  Type   | Collation | Nullable | Default 
 -----------+---------+-----------+----------+---------
  mode      | text    |           |          | 
@@ -109,6 +109,10 @@ FROM pg_track_optimizer_status;
  dsa_size  | bigint  |           |          | 
  is_synced | boolean |           |          | 
 
+-- The schema is forced by the control file: neither an already-installed
+-- extension nor a fresh install may relocate it elsewhere.
+ALTER EXTENSION pg_track_optimizer SET SCHEMA public;
+ERROR:  extension "pg_track_optimizer" does not support SET SCHEMA
 SELECT * FROM pg_track_optimizer_reset();
  pg_track_optimizer_reset 
 --------------------------
@@ -116,3 +120,5 @@ SELECT * FROM pg_track_optimizer_reset();
 (1 row)
 
 DROP EXTENSION pg_track_optimizer;
+CREATE EXTENSION pg_track_optimizer SCHEMA public;
+ERROR:  extension "pg_track_optimizer" must be installed in schema "pgto"

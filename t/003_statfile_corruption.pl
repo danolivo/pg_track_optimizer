@@ -18,6 +18,7 @@ $node->append_conf('postgresql.conf', qq(
 shared_preload_libraries = 'pg_track_optimizer'
 pg_track_optimizer.mode = 'forced'
 compute_query_id = on
+search_path = 'pgto, "\$user", public'
 ));
 
 # Start the cluster

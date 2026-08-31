@@ -30,6 +30,7 @@ $node->append_conf('postgresql.conf', qq(
 shared_preload_libraries = 'pg_track_optimizer'
 pg_track_optimizer.mode = 'disabled'
 compute_query_id = on
+search_path = 'pgto, "\$user", public'
 ));
 
 $node->start;
