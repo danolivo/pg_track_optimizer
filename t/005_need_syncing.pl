@@ -67,6 +67,7 @@ wait_synced($node);
 # flushed on exit just the same.
 $node->safe_psql('postgres',
 	'SELECT count(*) FROM need_sync_test WHERE x > 0;');
+wait_synced($node);
 
 # Restart drops shared memory; shutdown waits for backend exits, so all
 # pending flushes are on disk.  The first attach reloads the file.

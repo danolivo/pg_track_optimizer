@@ -18,6 +18,7 @@
 
 #include "access/htup_details.h"
 #include "access/parallel.h"
+#include "catalog/pg_database.h"
 #include "commands/dbcommands.h"
 #include "commands/explain.h"
 #if PG_VERSION_NUM >= 180000
