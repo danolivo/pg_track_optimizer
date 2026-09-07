@@ -102,6 +102,7 @@ jobs:
         cat >> $HOME/pgdata/postgresql.conf <<EOF
         shared_preload_libraries = 'pg_track_optimizer'
         pg_track_optimizer.mode = 'forced'
+        search_path = 'pgto, "$user", public'
         compute_query_id = on
         EOF
 
