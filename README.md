@@ -45,7 +45,14 @@ Queries with high error values are candidates for investigation: missing indexes
    `forced` mode loses 55-62% at 60-120 clients executing the same query.
    Full table in [`benchmarking.md`](benchmarking.md)
 -  **Query logging** - automatically log EXPLAIN for problematic queries
--  **Persistent storage** - optional flush to disk for long-term analysis
+-  **Persistent storage** - statistics are written to disk when a backend
+   exits normally (`auto_flush`) or on an explicit `pg_track_optimizer_flush()`
+   call, and read back the first time shared memory is set up after a
+   server start. After a crash, whatever accumulated since the last flush
+   is lost.
+-  **No restart to install** - shared memory is allocated on first use, so
+   `LOAD` or `session_preload_libraries` is enough; `shared_preload_libraries`
+   is optional
 -  **Flexible modes** - track all queries or only problematic ones
 
 ## Installation
@@ -64,15 +71,34 @@ sudo make USE_PGXS=1 install
 
 ### Loading the Extension
 
-Add to `postgresql.conf`:
-```ini
-shared_preload_libraries = 'pg_track_optimizer'
-```
-
-Restart PostgreSQL, then in your database:
+No server restart is needed. Create the extension in your database:
 ```sql
 CREATE EXTENSION pg_track_optimizer;
 ```
+
+and load the library into the sessions you want tracked. The shared memory
+the extension needs is allocated lazily, through the DSM registry, the first
+time any backend touches it, so there is no `shmem_request_hook` and nothing
+that has to happen in the postmaster. How you load the library decides the
+scope of tracking:
+
+- `LOAD 'pg_track_optimizer';` - tracks the current session only. Calling
+  any of the extension's functions (`pg_track_optimizer()`,
+  `pg_track_optimizer_status()`, ...) loads the library into that session
+  too, so a session that merely inspects the statistics starts tracking
+  its own queries from that point on, subject to `mode`.
+- `session_preload_libraries = 'pg_track_optimizer'` - tracks every backend
+  started after the setting is reloaded (`SELECT pg_reload_conf();`).
+  Existing connections are not affected; still no restart.
+- `shared_preload_libraries = 'pg_track_optimizer'` - the library is loaded
+  once in the postmaster and inherited by every child, so every backend is
+  tracked, background workers included, and no connection can slip through
+  unloaded. This one does require a restart, but it remains the simplest
+  option for "track everything".
+
+Whichever list you use, all backends share one set of statistics: an entry
+added by a `LOAD`ed session is visible to every other backend that loads the
+library, and the segment lives until the server shuts down.
 
 All of the extension's objects - the `rstats` type, its operators, the
 `pg_track_optimizer` and `pg_track_optimizer_status` views, and the
@@ -211,8 +237,10 @@ by default.
 Two caveats. Entries recorded before the setting changed keep their old key, so
 reset the statistics after toggling it. And for other consumers of the query id
 — `pg_stat_statements` in particular — to observe the collapsed value, this
-module must appear in `shared_preload_libraries` *after* them, because hooks
-run in the reverse of the order they were installed.
+module must be loaded *after* them, because hooks run in the reverse of the
+order they were installed. That means listing it after them in whichever
+preload list you use, `shared_preload_libraries` or
+`session_preload_libraries`, or issuing `LOAD` only once they are loaded.
 
 ### Choosing `mode` and `effort`
 
@@ -333,7 +361,7 @@ SELECT pg_track_optimizer_flush();
 SELECT pg_track_optimizer_reset();
 ```
 
-Statistics persist in shared memory until `pg_track_optimizer_reset()` is called or PostgreSQL restarts. Use `pg_track_optimizer_flush()` to save snapshots for historical analysis.
+Statistics live in shared memory until `pg_track_optimizer_reset()` is called or PostgreSQL shuts down. With `auto_flush` on (the default) every normally exiting backend writes them to disk, and the file is loaded back when the shared segment is first created after a start, so a clean restart loses nothing; a crash loses whatever accumulated since the last flush. Use `pg_track_optimizer_flush()` to save a snapshot explicitly, e.g. before maintenance.
 
 > **Note**: Both `pg_track_optimizer_flush()` and `pg_track_optimizer_reset()` require superuser privileges.
 
