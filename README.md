@@ -192,6 +192,29 @@ Two caveats when sizing it:
   server start refuse the file — with a warning naming the shortfall — and
   begin with an empty table. Flush and archive first if the history matters.
 
+#### `pg_track_optimizer.query_text_max_length`
+Caps how many bytes of query text are stored per entry, to bound the DSM
+footprint of statements that can run to tens of kilobytes (bulk `INSERT`s,
+generated reporting queries, and the like).
+
+- **`-1`** (default): no limit — the full query text is stored
+- **`0`** or higher: the text is truncated to at most this many bytes, cut
+  at a character boundary so multi-byte encodings are never split mid-character
+
+```sql
+-- Keep only the first 500 bytes of each stored query text
+ALTER SYSTEM SET pg_track_optimizer.query_text_max_length = 500;
+SELECT pg_reload_conf();
+```
+
+Truncation happens once, when an entry's query text is first stored;
+entries already tracked keep whatever length they were stored at until
+reset. Lowering this alongside `hash_mem` is the more predictable way to
+control memory use for workloads with unusually long, machine-generated
+statement text — unlike `hash_mem` alone, which only bounds the *aggregate*
+budget and can still let a handful of huge statements crowd out many
+smaller ones.
+
 #### `pg_track_optimizer.auto_flush`
 Controls automatic flushing of statistics to disk on backend shutdown.
 

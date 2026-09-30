@@ -29,6 +29,7 @@
 #include "executor/instrument.h"
 #include "funcapi.h"
 #include "lib/dshash.h"
+#include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "nodes/queryjumble.h"
 #include "pgstat.h"
@@ -253,6 +254,15 @@ static int track_mode = TRACK_MODE_DISABLED;
 static int track_effort = TRACK_EFFORT_TIMING;
 static double log_min_error = -1.0;
 static int hash_mem = 4096;
+
+/*
+ * Limits the number of query text bytes stored per entry.
+ * Query text storage can never be switched off entirely - at least the
+ * terminating NUL byte is always stored. Use -1 to leave the length
+ * unbounded.
+ */
+static int query_text_max_length = -1;
+
 static bool auto_flush = true;
 
 /* Per-plan-node instrumentation flags implied by the current effort level */
@@ -487,13 +497,6 @@ memory_limit(void)
 /*
  * Bytes charged to an entry that owns a query text of 'len' bytes (not
  * counting the terminating NUL).
- *
- * This is what the extension requests from the allocator, not what the
- * allocator consumes: dshash wraps the entry in a dshash_table_item and the
- * DSA rounds every request up to a size class, so the real footprint runs
- * roughly 1.2-1.5x this figure depending on the length of the query texts.
- * See dsa_size_classes[] in dsa.c and insert_into_bucket() in dshash.c;
- * pg_track_optimizer_status() reports both so the gap stays visible.
  */
 static inline uint64
 entry_memory_cost(Size len)
@@ -565,6 +568,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	DSMOptimizerTrackerEntry   *entry;
 	DSMOptimizerTrackerKey		key;
 	bool						found;
+	size_t						querylen = -2;
 
 	Assert(htab != NULL && queryDesc->plannedstmt->queryId != UINT64CONST(0));
 
@@ -591,9 +595,18 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 	 * pg_track_optimizer_status() instead.
 	 */
 	entry = dshash_find(htab, &key, true);
+	if ((entry == NULL) || !DsaPointerIsValid(entry->query_ptr))
+	{
+		/* Calculate query text length and cut off if requested */
+		querylen = strlen(queryDesc->sourceText);
+		if (query_text_max_length >= 0)
+			querylen = pg_mbcliplen(queryDesc->sourceText, (int) querylen,
+									query_text_max_length);
+	}
+
 	if (entry == NULL)
 	{
-		if (!memory_available(entry_memory_cost(strlen(queryDesc->sourceText))))
+		if (!memory_available(entry_memory_cost(querylen)))
 			return false;
 
 		entry = dshash_find_or_insert(htab, &key, &found);
@@ -608,7 +621,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 			entry->query_ptr = InvalidDsaPointer;
 	}
 	else if (!DsaPointerIsValid(entry->query_ptr) &&
-			 !memory_available(entry_memory_cost(strlen(queryDesc->sourceText))))
+			 !memory_available(entry_memory_cost(querylen)))
 	{
 		/*
 		 * An entry left incomplete by an initialization that failed earlier.
@@ -631,7 +644,6 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 
 	if (!DsaPointerIsValid(entry->query_ptr))
 	{
-		size_t		len = strlen(queryDesc->sourceText);
 		dsa_pointer	query_ptr;
 		char	   *strptr;
 
@@ -667,10 +679,12 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		 * that readers skip and the next execution of this query rebuilds.
 		 */
 		PGTO_INJECTION_POINT("pg_track_optimizer-query-text-alloc");
-		query_ptr = dsa_allocate0(htab_dsa, len + 1);
+
+		Assert(querylen >= 0);
+		query_ptr = dsa_allocate0(htab_dsa, querylen + 1);
 		Assert(DsaPointerIsValid(query_ptr));
 		strptr = (char *) dsa_get_address(htab_dsa, query_ptr);
-		strlcpy(strptr, queryDesc->sourceText, len + 1);
+		strlcpy(strptr, queryDesc->sourceText, querylen + 1);
 
 		/* This store completes the entry - keep it last */
 		PGTO_INJECTION_POINT("pg_track_optimizer-entry-publish");
@@ -682,7 +696,7 @@ store_data(QueryDesc *queryDesc, PlanEstimatorContext *ctx)
 		 * rebuilt) counts it exactly once.  The charge is derived from the
 		 * text length, the same way reset_htab() derives the release.
 		 */
-		entry_charge(entry_memory_cost(len));
+		entry_charge(entry_memory_cost(querylen));
 	}
 
 	/*
@@ -878,6 +892,18 @@ _PG_init(void)
 							0, INT_MAX,
 							PGC_SIGHUP,
 							GUC_UNIT_KB,
+							NULL,
+							NULL,
+							NULL);
+
+	DefineCustomIntVariable("pg_track_optimizer.query_text_max_length",
+							"Truncates the stored query string to this many bytes, to save DSM and storage space",
+							"-1 means no limit (default)",
+							&query_text_max_length,
+							-1,
+							-1, INT_MAX,
+							PGC_SUSET,
+							0,
 							NULL,
 							NULL,
 							NULL);
