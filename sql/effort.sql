@@ -22,14 +22,14 @@ SET pg_track_optimizer.mode = 'disabled';
 
 -- rows effort: estimation errors and query-level stats have one sample,
 -- time-weighted metrics have none
-SELECT avg_cnt, rms_cnt, wca_cnt, twa_cnt, jf_cnt, lf_cnt, sp_cnt,
+SELECT avg_cnt, rms_cnt, wca_cnt, twa_cnt, jf_cnt, sf_cnt, sp_cnt,
        time_cnt, blks_cnt, nexecs
 FROM pg_track_optimizer
 WHERE query LIKE '%count(*) FROM effort_test%'
   AND query NOT LIKE '%pg_track_optimizer%';
 
 -- timing effort: every metric has a sample
-SELECT avg_cnt, rms_cnt, wca_cnt, twa_cnt, jf_cnt, lf_cnt, sp_cnt,
+SELECT avg_cnt, rms_cnt, wca_cnt, twa_cnt, jf_cnt, sf_cnt, sp_cnt,
        time_cnt, blks_cnt, nexecs
 FROM pg_track_optimizer
 WHERE query LIKE '%sum(x) FROM effort_test%'

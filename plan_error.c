@@ -351,13 +351,13 @@ prediction_walker(PlanState *pstate, void *context)
 	 */
 	if (tmp_counter == ctx->counter && ctx->has_timing)
 	{
-		double	lf_factor = (pstate->instrument->nfiltered1 / nloops);
+		double	sf_factor = (pstate->instrument->nfiltered1 / nloops);
 
-		if (lf_factor > 0.)
-			lf_factor *= relative_time / real_rows;
+		if (sf_factor > 0.)
+			sf_factor *= relative_time / real_rows;
 
-		if (lf_factor > ctx->f_scan_filter)
-			ctx->f_scan_filter = lf_factor;
+		if (sf_factor > ctx->f_scan_filter)
+			ctx->f_scan_filter = sf_factor;
 	}
 
 	ctx->nnodes++;

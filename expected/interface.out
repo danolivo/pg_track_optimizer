@@ -66,11 +66,11 @@ FROM pg_track_optimizer_status;
  jf_cnt          | double precision |           |          | 
  jf_avg          | double precision |           |          | 
  jf_dev          | double precision |           |          | 
- lf_min          | double precision |           |          | 
- lf_max          | double precision |           |          | 
- lf_cnt          | double precision |           |          | 
- lf_avg          | double precision |           |          | 
- lf_dev          | double precision |           |          | 
+ sf_min          | double precision |           |          | 
+ sf_max          | double precision |           |          | 
+ sf_cnt          | double precision |           |          | 
+ sf_avg          | double precision |           |          | 
+ sf_dev          | double precision |           |          | 
  sp_min          | double precision |           |          | 
  sp_max          | double precision |           |          | 
  sp_cnt          | double precision |           |          | 

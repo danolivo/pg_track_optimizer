@@ -63,7 +63,7 @@ typedef struct PlanEstimatorContext
 	/* JOIN filtering statistics */
 	double	f_join_filter;
 
-	/* Leaf node filtering statistics */
+	/* Scan node filtering statistics */
 	double	f_scan_filter;
 
 	/*

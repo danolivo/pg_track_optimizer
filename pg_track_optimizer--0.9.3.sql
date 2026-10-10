@@ -296,10 +296,10 @@ CREATE VIEW pg_track_optimizer AS SELECT
   t.f_join_filter -> 'count' AS jf_cnt,
   t.f_join_filter -> 'mean' AS jf_avg, t.f_join_filter -> 'stddev' AS jf_dev,
 
-  /* Leaf node filtering factor statistics (time-weighted filtering overhead) */
-  t.f_scan_filter -> 'min' AS lf_min, t.f_scan_filter -> 'max' AS lf_max,
-  t.f_scan_filter -> 'count' AS lf_cnt,
-  t.f_scan_filter -> 'mean' AS lf_avg, t.f_scan_filter -> 'stddev' AS lf_dev,
+  /* Scan filtering factor statistics (time-weighted filtering overhead) */
+  t.f_scan_filter -> 'min' AS sf_min, t.f_scan_filter -> 'max' AS sf_max,
+  t.f_scan_filter -> 'count' AS sf_cnt,
+  t.f_scan_filter -> 'mean' AS sf_avg, t.f_scan_filter -> 'stddev' AS sf_dev,
 
   /* Worst SubPlan cost factor (nloops * cost) statistics */
   t.f_worst_splan -> 'min' AS sp_min, t.f_worst_splan -> 'max' AS sp_max,
